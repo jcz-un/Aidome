@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.ununn.aidome.mapper.ChatSessionTitleMapper">
+
+    <!-- 插入会话标题 -->
+    <insert id="insert" parameterType="com.ununn.aidome.pojo.ChatSessionTitle">
+        INSERT INTO chat_session_title (session_id, session_title)
+        VALUES (#{sessionId}, #{sessionTitle})
+        ON DUPLICATE KEY UPDATE session_title = #{sessionTitle}
+    </insert>
+
+    <!-- 根据会话ID更新会话标题 -->
+    <update id="updateBySessionId">
+        UPDATE chat_session_title
+        SET session_title = #{sessionTitle}
+        WHERE session_id = #{sessionId}
+    </update>
+
+    <!-- 根据会话ID查询会话标题 -->
+    <select id="selectBySessionId" parameterType="String" resultType="com.ununn.aidome.pojo.ChatSessionTitle">
+        SELECT session_id, session_title
+        FROM chat_session_title
+        WHERE session_id = #{sessionId}
+    </select>
+
+    <!-- 根据会话ID删除会话标题 -->
+    <delete id="deleteBySessionId" parameterType="String">
+        DELETE FROM chat_session_title
+        WHERE session_id = #{sessionId}
+    </delete>
+
+    <!-- 根据用户ID查询所有会话标题 -->
+    <select id="selectAllByUserId" parameterType="Integer" resultType="com.ununn.aidome.pojo.ChatSessionTitle">
+        SELECT cst.session_id, cst.session_title
+        FROM chat_session_title cst
+        INNER JOIN chat_message cm ON cst.session_id = cm.session_id
+        WHERE cm.user_id = #{userId}
+        GROUP BY cst.session_id, cst.session_title
+        ORDER BY MAX(cm.create_time) DESC
+    </select>
+
+</mapper>

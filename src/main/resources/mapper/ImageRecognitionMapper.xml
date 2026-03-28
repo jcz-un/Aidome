@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.ununn.aidome.mapper.ImageRecognitionMapper">
+
+    <!-- 插入图片识别记录 -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO image_recognition (
+            user_id, image_url, recognition_result, recognition_model, recognition_time, status, error_msg
+        ) VALUES (
+            #{userId}, #{imageUrl}, #{recognitionResult}, #{recognitionModel}, #{recognitionTime}, #{status}, #{errorMsg}
+        )
+    </insert>
+
+    <!-- 根据ID查询图片识别记录 -->
+    <select id="selectById" resultType="com.ununn.aidome.pojo.ImageRecognition">
+        SELECT
+            id, user_id AS userId, image_url AS imageUrl, recognition_result AS recognitionResult,
+            recognition_model AS recognitionModel, recognition_time AS recognitionTime, status, error_msg AS errorMsg
+        FROM image_recognition
+        WHERE id = #{id}
+    </select>
+
+    <!-- 根据用户ID查询图片识别记录列表 -->
+    <select id="selectByUserId" resultType="com.ununn.aidome.pojo.ImageRecognition">
+        SELECT
+            id, user_id AS userId, image_url AS imageUrl, recognition_result AS recognitionResult,
+            recognition_model AS recognitionModel, recognition_time AS recognitionTime, status, error_msg AS errorMsg
+        FROM image_recognition
+        WHERE user_id = #{userId}
+        ORDER BY recognition_time DESC
+        <if test="limit != null and limit > 0">
+            LIMIT #{limit}
+        </if>
+    </select>
+
+    <!-- 根据用户ID和时间范围查询图片识别记录列表 -->
+    <select id="selectByUserIdAndTimeRange" resultType="com.ununn.aidome.pojo.ImageRecognition">
+        SELECT
+            id, user_id AS userId, image_url AS imageUrl, recognition_result AS recognitionResult,
+            recognition_model AS recognitionModel, recognition_time AS recognitionTime, status, error_msg AS errorMsg
+        FROM image_recognition
+        WHERE user_id = #{userId}
+        <if test="startTime != null and startTime != ''">
+            AND recognition_time >= #{startTime}
+        </if>
+        <if test="endTime != null and endTime != ''">
+            AND recognition_time &lt;= #{endTime}
+        </if>
+        ORDER BY recognition_time DESC
+    </select>
+
+    <!-- 更新图片识别记录状态 -->
+    <update id="updateStatus">
+        UPDATE image_recognition
+        SET
+            status = #{status},
+            error_msg = #{errorMsg}
+        WHERE id = #{id}
+    </update>
+
+    <!-- 删除图片识别记录 -->
+    <delete id="deleteById">
+        DELETE FROM image_recognition
+        WHERE id = #{id}
+    </delete>
+
+</mapper>
