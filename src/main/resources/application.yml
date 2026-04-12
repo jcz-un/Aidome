@@ -33,6 +33,15 @@ spring:
         options:
           model: qwen-turbo
           temperature: 0.7
+    vectorstore:
+      redis:
+        index-name: rag_index
+        prefix: rag:vector
+        database: 0
+    embedding:
+      options:
+        model: text-embedding-v3
+
   logging:
     charset:
       console: UTF-8

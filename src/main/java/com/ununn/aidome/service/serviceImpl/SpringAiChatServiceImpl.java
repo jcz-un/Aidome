@@ -161,7 +161,7 @@ public class SpringAiChatServiceImpl implements SpringAiChatService {
             // 7. 调用ChatClient发送请求给AI（显式指定函数）
             String aiResponse = chatClientWithMemory.prompt()
                     .messages(messages)
-                    .functions("queryCoursesFunction", "getTimetableFunction")
+                    .tools("queryCoursesFunction", "getTimetableFunction")
                     .options(options)
                     .call()
                     .content();
@@ -246,7 +246,7 @@ public class SpringAiChatServiceImpl implements SpringAiChatService {
                 // 6. 调用ChatClient的流式API（显式指定函数）
                 chatClientWithMemory.prompt()
                         .messages(messages)
-                        .functions("queryCoursesFunction", "getTimetableFunction")
+                        .tools("queryCoursesFunction", "getTimetableFunction")
                         .options(options)
                         .stream()
                         .content()

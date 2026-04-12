@@ -105,7 +105,7 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
                 var promptBuilder = chatClientWithMemory.prompt().messages(messages);
                 List<String> tools = strategy.getRequiredTools();
                 if (!tools.isEmpty()) {
-                    promptBuilder.functions(tools.toArray(new String[0]));
+                    promptBuilder.tools(tools.toArray(new String[0]));
                     log.info("注册工具：{}", tools);
                 }
                 
@@ -188,7 +188,7 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
             var promptBuilder = chatClientWithMemory.prompt().messages(messages);
             List<String> tools = strategy.getRequiredTools();
             if (!tools.isEmpty()) {
-                promptBuilder.functions(tools.toArray(new String[0]));
+                promptBuilder.tools(tools.toArray(new String[0]));
                 log.info("注册工具: {}", tools);
             }
             

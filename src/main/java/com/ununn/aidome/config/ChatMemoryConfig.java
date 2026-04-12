@@ -6,6 +6,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+
 /**
  * ChatClient 配置类
  * 
@@ -34,6 +35,7 @@ public class ChatMemoryConfig {
      * @param chatModel DashScope 聊天模型
      * @return 配置好的 ChatClient
      */
+
     @Bean
     public ChatClient chatClientWithMemory(DashScopeChatModel chatModel) {
         return ChatClient.builder(chatModel)
@@ -41,7 +43,6 @@ public class ChatMemoryConfig {
                         .withModel("qwen-max")
                         .withTemperature(0.7)
                         .build())
-                .defaultFunctions("queryCoursesFunction")
                 .build();
     }
 }
