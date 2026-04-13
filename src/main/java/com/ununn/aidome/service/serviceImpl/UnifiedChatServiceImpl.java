@@ -1,13 +1,17 @@
 package com.ununn.aidome.service.serviceImpl;
 
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
+import com.ununn.aidome.ai.tool.AcademicInfoTool;
 import com.ununn.aidome.ai.tool.TimetableTool;
 import com.ununn.aidome.context.ChatContext;
 import com.ununn.aidome.enums.IntentType;
+import com.ununn.aidome.exception.AIServiceException;
+import com.ununn.aidome.exception.ValidationException;
 import com.ununn.aidome.pojo.ChatMessage;
 import com.ununn.aidome.pojo.Result;
 import com.ununn.aidome.service.UnifiedChatService;
 import com.ununn.aidome.strategy.ChatStrategy;
+import com.ununn.aidome.strategy.impl.AcademicInfoStrategy;
 import com.ununn.aidome.strategy.impl.CourseQueryStrategy;
 import com.ununn.aidome.strategy.impl.GeneralChatStrategy;
 import com.ununn.aidome.strategy.impl.ImageRecognitionStrategy;
@@ -54,16 +58,33 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
     private ImageRecognitionStrategy imageRecognitionStrategy;
     
     @Autowired
+    private AcademicInfoStrategy academicInfoStrategy;
+    
+    @Autowired
     private TimetableTool timetableTool;
+    
+    @Autowired
+    private AcademicInfoTool academicInfoTool;
     
     @Override
     public Result chatWithIntent(Integer userId, String sessionId, String message, Boolean webSearchEnabled) {
+        // 1. 参数校验
+        if (userId == null || userId <= 0) {
+            throw new ValidationException("用户ID不能为空");
+        }
+        if (sessionId == null || sessionId.trim().isEmpty()) {
+            throw new ValidationException("会话ID不能为空");
+        }
+        if (message == null || message.trim().isEmpty()) {
+            throw new ValidationException("消息内容不能为空");
+        }
+        
         try {
-            // 1. 识别意图
+            // 2. 识别意图
             IntentType intent = classifyIntent(message);
             log.info("识别到意图：{}, 用户消息：{}", intent, message);
             
-            // 2. 创建聊天上下文
+            // 3. 创建聊天上下文
             ChatContext context = new ChatContext();
             context.setUserId(userId);
             context.setSessionId(sessionId);
@@ -72,12 +93,15 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
             context.setIntentConfidence(1.0);
             context.setWebSearchEnabled(webSearchEnabled);
             
-            // 3. 调用统一处理
+            // 4. 调用统一处理
             return chat(context);
             
+        } catch (ValidationException e) {
+            // 参数校验异常直接抛出，由全局异常处理器处理
+            throw e;
         } catch (Exception e) {
-            log.error("智能聊天失败", e);
-            return Result.error("聊天失败：" + e.getMessage());
+            log.error("智能聊天失败 - 用户ID: {}, 会话ID: {}", userId, sessionId, e);
+            throw new AIServiceException("聊天处理失败", e);
         }
     }
     
@@ -186,15 +210,23 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
     
     @Override
     public Result chat(ChatContext context) {
+        // 1. 参数校验
+        if (context == null) {
+            throw new ValidationException("聊天上下文不能为空");
+        }
+        if (context.getIntentType() == null) {
+            throw new ValidationException("意图类型不能为空");
+        }
+        
         try {
-            // 1. 根据意图选择策略
+            // 2. 根据意图选择策略
             ChatStrategy strategy = selectStrategy(context.getIntentType());
             log.info("选择策略：{}, 处理用户消息：{}", strategy.getClass().getSimpleName(), context.getUserMessage());
             
-            // 2. 构建消息列表
+            // 3. 构建消息列表
             List<Message> messages = buildMessages(context, strategy);
             
-            // 3. 配置工具（只注册当前策略需要的工具）
+            // 4. 配置工具（只注册当前策略需要的工具）
             var promptBuilder = chatClientWithMemory.prompt().messages(messages);
             List<String> toolNames = strategy.getRequiredTools();
             if (!toolNames.isEmpty()) {
@@ -206,7 +238,7 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
                 }
             }
             
-            // 4. 配置模型参数
+            // 5. 配置模型参数
             DashScopeChatOptions options = DashScopeChatOptions.builder()
                     .withModel("qwen-max")
                     .withTemperature(0.7)
@@ -217,20 +249,20 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
                 log.info("启用联网搜索");
             }
             
-            // 5. 调用 AI
+            // 6. 调用 AI
             log.info("调用AI模型处理消息");
             String aiResponse = promptBuilder.options(options).call().content();
             log.info("AI响应: {}", aiResponse);
             
-            // 5. 后处理响应
+            // 7. 后处理响应
             String processedResponse = strategy.postProcessResponse(context, aiResponse);
             
-            // 6. 保存消息到 Redis
+            // 8. 保存消息到 Redis
             if (strategy.shouldSaveMessage()) {
                 saveMessages(context, processedResponse);
             }
             
-            // 7. 返回结果
+            // 9. 返回结果
             Map<String, Object> response = Map.of(
                 "sessionId", context.getSessionId(),
                 "message", processedResponse,
@@ -238,9 +270,13 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
             );
             return Result.success(response);
                 
+        } catch (ValidationException e) {
+            // 参数校验异常直接抛出
+            throw e;
         } catch (Exception e) {
-            log.error("统一聊天服务失败", e);
-            return Result.error("聊天失败：" + e.getMessage());
+            log.error("统一聊天服务失败 - 用户ID: {}, 会话ID: {}", 
+                    context.getUserId(), context.getSessionId(), e);
+            throw new AIServiceException("聊天服务异常", e);
         }
     }
     
@@ -255,6 +291,13 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
         }
         
         String lowerMsg = message.toLowerCase();
+        
+        // 学业信息查询关键词匹配（优先级高于课程查询）
+        for (String keyword : IntentType.ACADEMIC_INFO.getKeywords()) {
+            if (lowerMsg.contains(keyword)) {
+                return IntentType.ACADEMIC_INFO;
+            }
+        }
         
         // 课程查询关键词匹配
         for (String keyword : IntentType.COURSE_QUERY.getKeywords()) {
@@ -282,6 +325,7 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
     private ChatStrategy selectStrategy(IntentType intentType) {
         return switch (intentType) {
             case COURSE_QUERY -> courseQueryStrategy;
+            case ACADEMIC_INFO -> academicInfoStrategy;
             case IMAGE_RECOGNITION -> imageRecognitionStrategy;
             case GENERAL_CHAT -> generalChatStrategy;
             default -> generalChatStrategy;
@@ -371,6 +415,9 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
                         .build();
                 case "getTimetableFunction" -> FunctionToolCallback.builder("getTimetableFunction", timetableTool.getTimetableFunction())
                         .inputType(TimetableTool.GetTimetableRequest.class)
+                        .build();
+                case "queryAcademicInfoFunction" -> FunctionToolCallback.builder("queryAcademicInfoFunction", academicInfoTool.queryAcademicInfoFunction())
+                        .inputType(AcademicInfoTool.QueryAcademicInfoRequest.class)
                         .build();
                 default -> {
                     log.warn("未知工具名称: {}", toolName);

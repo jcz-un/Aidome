@@ -54,7 +54,7 @@ public class GraduationDocVectorTest {
     public void testSearch() {
         System.out.println("\n========== 测试：向量检索 ==========");
         
-        String query = "旅游管理专业的核心课程有哪些";
+        String query = "软件工程专业的专业课有哪些";
         System.out.println("查询: " + query);
         
         List<Document> results = graduationDocVectorUtil.search(query, 5);

@@ -30,5 +30,18 @@ public class Result<T> {
         result.code = 0;
         return result;
     }
+    
+    /**
+     * 带错误码的失败响应
+     * @param code 错误码（HTTP状态码或业务错误码）
+     * @param msg 错误消息
+     * @return Result对象
+     */
+    public static <T> Result<T> error(Integer code, String msg) {
+        Result<T> result = new Result<T>();
+        result.code = code;
+        result.msg = msg;
+        return result;
+    }
 
 }

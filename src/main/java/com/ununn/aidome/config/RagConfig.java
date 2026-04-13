@@ -70,6 +70,7 @@ package com.ununn.aidome.config;
 
 import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
 import com.alibaba.cloud.ai.dashscope.embedding.DashScopeEmbeddingModel;
+import com.alibaba.cloud.ai.dashscope.embedding.DashScopeEmbeddingOptions;
 import org.springframework.ai.document.MetadataMode;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -94,6 +95,15 @@ public class RagConfig {
 
     @Bean
     public DashScopeApi dashScopeApi() {
+        System.out.println("========== 初始化 DashScopeApi ==========");
+        System.out.println("API Key: " + (apiKey != null && apiKey.length() > 8 ? apiKey.substring(0, 8) + "..." : "null或空"));
+        System.out.println("===========================================");
+        
+        if (apiKey == null || apiKey.isEmpty() || "DASHSCOPE_API_KEY".equals(apiKey)) {
+            System.err.println("⚠️  警告: DASHSCOPE_API_KEY 未正确配置！");
+            System.err.println("请设置环境变量: $env:DASHSCOPE_API_KEY=\"sk-your-api-key\"");
+        }
+        
         return new DashScopeApi.Builder()
                 .apiKey(apiKey)
                 .restClientBuilder(RestClient.builder())
@@ -102,7 +112,22 @@ public class RagConfig {
 
     @Bean
     public EmbeddingModel embeddingModel(DashScopeApi dashScopeApi) {
-        return new DashScopeEmbeddingModel(dashScopeApi, MetadataMode.EMBED);
+        // 显式指定 Embedding 模型
+        System.out.println("========== 初始化 EmbeddingModel ==========");
+        System.out.println("API Key: " + (apiKey != null && apiKey.length() > 8 ? apiKey.substring(0, 8) + "..." : "null或空"));
+        System.out.println("===========================================");
+        
+        // 创建 Embedding 选项，使用正确的模型名称
+        // DashScope 支持的模型: text-embedding-v1, text-embedding-v2
+        DashScopeEmbeddingOptions options = DashScopeEmbeddingOptions.builder()
+                .withModel("text-embedding-v1")  // 使用 v2 版本
+                .build();
+        
+        return new DashScopeEmbeddingModel(
+            dashScopeApi, 
+            MetadataMode.EMBED,
+            options
+        );
     }
 
     @Bean
