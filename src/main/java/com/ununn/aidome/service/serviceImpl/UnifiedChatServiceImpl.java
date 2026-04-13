@@ -1,6 +1,7 @@
 package com.ununn.aidome.service.serviceImpl;
 
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
+import com.ununn.aidome.ai.tool.TimetableTool;
 import com.ununn.aidome.context.ChatContext;
 import com.ununn.aidome.enums.IntentType;
 import com.ununn.aidome.pojo.ChatMessage;
@@ -16,6 +17,8 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -49,6 +52,9 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
     
     @Autowired
     private ImageRecognitionStrategy imageRecognitionStrategy;
+    
+    @Autowired
+    private TimetableTool timetableTool;
     
     @Override
     public Result chatWithIntent(Integer userId, String sessionId, String message, Boolean webSearchEnabled) {
@@ -103,10 +109,14 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
                 
                 // 5. 配置工具
                 var promptBuilder = chatClientWithMemory.prompt().messages(messages);
-                List<String> tools = strategy.getRequiredTools();
-                if (!tools.isEmpty()) {
-                    promptBuilder.tools(tools.toArray(new String[0]));
-                    log.info("注册工具：{}", tools);
+                List<String> toolNames = strategy.getRequiredTools();
+                if (!toolNames.isEmpty()) {
+                    // 将工具名称转换为 ToolCallback 数组
+                    ToolCallback[] toolCallbacks = resolveToolCallbacks(toolNames);
+                    if (toolCallbacks.length > 0) {
+                        promptBuilder.toolCallbacks(toolCallbacks);
+                        log.info("注册工具：{}", toolNames);
+                    }
                 }
                 
                 // 6. 配置模型参数
@@ -186,10 +196,14 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
             
             // 3. 配置工具（只注册当前策略需要的工具）
             var promptBuilder = chatClientWithMemory.prompt().messages(messages);
-            List<String> tools = strategy.getRequiredTools();
-            if (!tools.isEmpty()) {
-                promptBuilder.tools(tools.toArray(new String[0]));
-                log.info("注册工具: {}", tools);
+            List<String> toolNames = strategy.getRequiredTools();
+            if (!toolNames.isEmpty()) {
+                // 将工具名称转换为 ToolCallback 数组
+                ToolCallback[] toolCallbacks = resolveToolCallbacks(toolNames);
+                if (toolCallbacks.length > 0) {
+                    promptBuilder.toolCallbacks(toolCallbacks);
+                    log.info("注册工具: {}", toolNames);
+                }
             }
             
             // 4. 配置模型参数
@@ -340,5 +354,35 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
             log.error("保存消息失败", e);
             // 保存失败不影响主流程
         }
+    }
+    
+    /**
+     * 根据工具名称解析 ToolCallback 数组
+     * @param toolNames 工具名称列表
+     * @return ToolCallback 数组
+     */
+    private ToolCallback[] resolveToolCallbacks(List<String> toolNames) {
+        List<ToolCallback> callbacks = new ArrayList<>();
+        
+        for (String toolName : toolNames) {
+            ToolCallback callback = switch (toolName) {
+                case "queryCoursesFunction" -> FunctionToolCallback.builder("queryCoursesFunction", timetableTool.queryCoursesFunction())
+                        .inputType(TimetableTool.QueryCoursesRequest.class)
+                        .build();
+                case "getTimetableFunction" -> FunctionToolCallback.builder("getTimetableFunction", timetableTool.getTimetableFunction())
+                        .inputType(TimetableTool.GetTimetableRequest.class)
+                        .build();
+                default -> {
+                    log.warn("未知工具名称: {}", toolName);
+                    yield null;
+                }
+            };
+            
+            if (callback != null) {
+                callbacks.add(callback);
+            }
+        }
+        
+        return callbacks.toArray(new ToolCallback[0]);
     }
 }
