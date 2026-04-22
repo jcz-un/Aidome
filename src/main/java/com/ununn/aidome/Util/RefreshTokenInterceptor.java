@@ -11,6 +11,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+import static cn.hutool.core.lang.Console.print;
+
 public class RefreshTokenInterceptor implements HandlerInterceptor {
 
     private StringRedisTemplate stringRedisTemplate;
@@ -51,7 +53,12 @@ public class RefreshTokenInterceptor implements HandlerInterceptor {
             
         // 6.刷新token过期时间
         stringRedisTemplate.expire(RedisConstants.LOGIN_USER_KEY + token, RedisConstants.LOGIN_USER_TTL, TimeUnit.MINUTES);
-            
+
+
+        // 7.设置用户ID
+        Integer userid1 = (Integer) request.getAttribute("userId");
+        UserContext.setUserId(userid1);
+
         // 7.返回true,放行
         return true;
     }

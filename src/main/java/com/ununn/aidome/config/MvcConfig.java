@@ -17,7 +17,7 @@ public class MvcConfig implements WebMvcConfigurer {
     @Override
     public void addInterceptors(InterceptorRegistry registry){
         registry.addInterceptor(new RefreshTokenInterceptor(stringRedisTemplate)).
-                addPathPatterns("/image-recognition/**", "/chat/**", "/avatar/**", "/user/**", "/springai/**").
+                addPathPatterns("/image-recognition/**", "/chat/**", "/avatar/**", "/user/**", "/springai/**", "/api/semester/**","/api/timetable/ai/**").
                 excludePathPatterns("/user/login", "/user/register", "/user/code").order(0);
     }
 

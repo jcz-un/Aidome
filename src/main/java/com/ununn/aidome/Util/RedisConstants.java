@@ -28,4 +28,8 @@ public class RedisConstants {
     public static final String CHAT_USER_CURRENT_SESSION_KEY = "chat:user:current:session:";
     public static final String CHAT_SESSION_MESSAGE_COUNT_KEY = "chat:session:count:"; // 会话消息数量（偏移量）
     public static final Integer MAX_CHAT_ROUNDS = 8; // 固定轮次截断的最大轮数（最近8轮），同时用于控制Redis只保存最新8轮消息
+
+    // 课表PDF解析相关常量
+    public static final String TIMETABLE_PREVIEW_KEY = "timetable:preview:"; // PDF课表预览AI响应缓存
+    public static final Long TIMETABLE_PREVIEW_TTL = 5L; // 5分钟过期（用户预览
 }

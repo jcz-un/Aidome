@@ -1,6 +1,9 @@
 package com.ununn.aidome.service.serviceImpl;
 
+import com.ununn.aidome.Util.RedisConstants;
+import com.ununn.aidome.Util.UserContext;
 import com.ununn.aidome.pojo.Timetable;
+import com.ununn.aidome.pojo.User;
 import com.ununn.aidome.service.TimetableAiService;
 import com.ununn.aidome.service.TimetableService;
 import org.apache.pdfbox.Loader;
@@ -8,13 +11,20 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
+
 
 import java.io.IOException;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+
+import static com.ununn.aidome.Util.RedisConstants.TIMETABLE_PREVIEW_KEY;
 
 /**
  * AI课表解析服务实现类
@@ -28,6 +38,16 @@ public class TimetableAiServiceImpl implements TimetableAiService {
 
     @Autowired
     private TimetableService timetableService;
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
+    /**
+     * 用于临时存储AI解析结果的线程安全Map
+     * Key: 文件唯一标识 (文件名_文件大小)
+     * Value: AI返回的原始JSON响应字符串
+     */
+    private final Map<String, String> previewCache = new ConcurrentHashMap<>();
 
     private static final String AI_PROMPT = """
 你是一个专业的课程表解析助手，请帮我从以下PDF文本中提取课程信息，并以JSON格式返回。
@@ -59,20 +79,28 @@ PDF文本：
 %s
 """;
 
+
+    /**
+     * 解析并预览PDF课表
+     * @param file PDF文件
+     * @return
+     */
     @Override
     public List<Timetable> previewPdfWithAi(MultipartFile file) {
         try {
-            // 提取PDF文本
+
+            String aiResponse = null;
+            String redisKey = TIMETABLE_PREVIEW_KEY + UserContext.getUserId();
+            
+            // 1. 提取PDF文本
             String pdfText = extractTextFromPdf(file);
             System.out.println("========== PDF文本提取完成 ==========");
             System.out.println("PDF文本长度: " + pdfText.length());
             System.out.println("PDF文本前500字符: " + pdfText.substring(0, Math.min(500, pdfText.length())));
 
-            // 构建AI提示词
+            // 2. 构建AI提示词并调用
             String prompt = String.format(AI_PROMPT, pdfText);
-
-            // 调用AI分析
-            String aiResponse = chatClient.prompt()
+            aiResponse = chatClient.prompt()
                     .user(prompt)
                     .call()
                     .content();
@@ -80,7 +108,15 @@ PDF文本：
             System.out.println("========== AI分析完成 ==========");
             System.out.println("AI响应: " + aiResponse);
 
-            // 解析AI响应并返回课程列表（不保存到数据库，userId为null）
+            //3. 将数据保存到redis中
+            stringRedisTemplate.opsForValue().set(
+                    redisKey,
+                    aiResponse,
+                    RedisConstants.TIMETABLE_PREVIEW_TTL,
+                    TimeUnit.MINUTES
+            );
+
+            // 4. 解析AI响应并返回预览数据
             return parseAiResponseToTimetableList(aiResponse, null, null);
 
         } catch (Exception e) {
@@ -89,29 +125,47 @@ PDF文本：
         }
     }
 
+
+    /**
+     * 从redis中获取数据并保存到数据库
+     * @param file PDF文件
+     * @param userId 用户ID
+     * @param semesterStartDate 学期开始日期
+     * @return
+     */
     @Override
     public String analyzePdfWithAi(MultipartFile file, Integer userId, LocalDate semesterStartDate) {
+
+        //从redis中获取缓存
+        String redisKey = TIMETABLE_PREVIEW_KEY + UserContext.getUserId();
+        String aiResponse = stringRedisTemplate.opsForValue().get(redisKey);
+
         try {
-            // 提取PDF文本
-            String pdfText = extractTextFromPdf(file);
-            System.out.println("========== PDF文本提取完成 ==========");
-            System.out.println("PDF文本长度: " + pdfText.length());
-            System.out.println("PDF文本前500字符: " + pdfText.substring(0, Math.min(500, pdfText.length())));
+            if (aiResponse == null) {
+                System.out.println("未命中缓存，开始重新解析PDF...");
+                // 如果缓存中没有（比如用户直接点导入没点预览），则执行解析逻辑
+                String pdfText = extractTextFromPdf(file);
+                System.out.println("========== PDF文本提取完成 ==========");
+                System.out.println("PDF文本长度: " + pdfText.length());
+                System.out.println("PDF文本前500字符: " + pdfText.substring(0, Math.min(500, pdfText.length())));
 
-            // 构建AI提示词
-            String prompt = String.format(AI_PROMPT, pdfText);
+                String prompt = String.format(AI_PROMPT, pdfText);
+                aiResponse = chatClient.prompt()
+                        .user(prompt)
+                        .call()
+                        .content();
+                System.out.println("========== AI分析完成 ==========");
+                System.out.println("AI响应: " + aiResponse);
+            } else {
+                // 保存到数据库
+                return saveFromAiResponse(aiResponse, userId, semesterStartDate);
+            }
 
-            // 调用AI分析
-            String aiResponse = chatClient.prompt()
-                    .user(prompt)
-                    .call()
-                    .content();
+            // 清理缓存
+            stringRedisTemplate.delete(redisKey);
 
-            System.out.println("========== AI分析完成 ==========");
-            System.out.println("AI响应: " + aiResponse);
-
-            // 保存到数据库
-            return saveFromAiResponse(aiResponse, userId, semesterStartDate);
+            //将数据保存到数据中并返回结果
+            return  saveFromAiResponse(aiResponse, userId, semesterStartDate);
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -119,6 +173,14 @@ PDF文本：
         }
     }
 
+
+    /**
+     * 保存从AI解析的课表数据
+     * @param jsonResponse AI返回的JSON数据
+     * @param userId 用户ID
+     * @param semesterStartDate 开学时间
+     * @return
+     */
     @Override
     public String saveFromAiResponse(String jsonResponse, Integer userId, LocalDate semesterStartDate) {
         System.out.println("========== saveFromAiResponse 开学时间: " + semesterStartDate + " ==========");
@@ -143,6 +205,8 @@ PDF文本：
             return "保存失败: " + e.getMessage();
         }
     }
+
+
 
     /**
      * 解析AI响应为课程列表
@@ -190,7 +254,7 @@ PDF文本：
             System.err.println("解析AI响应失败: " + e.getMessage());
             e.printStackTrace();
         }
-        
+
         return timetableList;
     }
 

@@ -68,14 +68,15 @@ public class SpringAiChatController {
     @PostMapping("/send")
     public Result sendMessage(
             @RequestParam String message,
+            @RequestParam(required = false) String sessionId,
             @RequestParam(required = false, defaultValue = "true") Boolean webSearchEnabled,
             HttpServletRequest request) {
         Integer userId = (Integer) request.getAttribute("userId");
-        // 获取或创建会话 ID
-        String sessionId = chatCommonService.getOrCreateSessionId(userId);
+        if (sessionId == null || sessionId.trim().isEmpty()) {
+            sessionId = chatCommonService.getOrCreateSessionId(userId);
+        }
         log.info("用户{}发送消息：{}，联网搜索：{}，会话 ID：{}", userId, message, webSearchEnabled, sessionId);
-                
-        // ⭐ 直接调用统一聊天服务（带意图识别）
+
         return unifiedChatService.chatWithIntent(userId, sessionId, message, webSearchEnabled);
     }
 

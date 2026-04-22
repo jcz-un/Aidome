@@ -1,5 +1,6 @@
 package com.ununn.aidome.controller;
 
+import com.ununn.aidome.Util.UserContext;
 import com.ununn.aidome.pojo.Result;
 import com.ununn.aidome.pojo.Timetable;
 import com.ununn.aidome.service.TimetableAiService;
@@ -43,17 +44,16 @@ public class TimetableAiController {
     /**
      * 使用AI解析PDF课表并保存到数据库
      * @param file PDF文件
-     * @param userId 用户ID
      * @param semesterStartDate 开学时间（可选，格式：yyyy-MM-dd）
      * @return 解析结果
      */
     @PostMapping("/analyze")
     public Result<String> analyzePdfWithAi(
             @RequestParam("file") MultipartFile file,
-            @RequestParam("userId") Integer userId,
             @RequestParam(value = "semesterStartDate", required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") LocalDate semesterStartDate) {
         System.out.println("========== 接收到的开学时间: " + semesterStartDate + " ==========");
         try {
+            Integer userId = UserContext.getUserId();
             String result = timetableAiService.analyzePdfWithAi(file, userId, semesterStartDate);
             if (result.contains("成功")) {
                 return Result.success(result);
@@ -69,16 +69,15 @@ public class TimetableAiController {
     /**
      * 解析AI返回的JSON数据并保存到数据库
      * @param jsonResponse AI返回的JSON数据
-     * @param userId 用户ID
      * @param semesterStartDate 开学时间（可选，格式：yyyy-MM-dd）
      * @return 保存结果
      */
     @PostMapping("/save")
     public Result<String> saveFromAiResponse(
             @RequestBody String jsonResponse,
-            @RequestParam("userId") Integer userId,
             @RequestParam(value = "semesterStartDate", required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") LocalDate semesterStartDate) {
         try {
+            Integer userId = UserContext.getUserId();
             String result = timetableAiService.saveFromAiResponse(jsonResponse, userId, semesterStartDate);
             if (result.contains("成功")) {
                 return Result.success(result);

@@ -64,7 +64,7 @@ server:
   port: 8080
 sky:
   alioss:
-    endpoint: ${ALIYUN_OSS_ENDPOINT:oss-cn-beijing.aliyuncs.com}
-    access-key-id: ${ALIYUN_OSS_ACCESS_KEY_ID:ALIYUN_OSS_ACCESS_KEY_ID}
-    access-key-secret: ${ALIYUN_OSS_ACCESS_KEY_SECRET:ALIYUN_OSS_ACCESS_KEY_SECRET}
-    bucket-name: ${ALIYUN_OSS_BUCKET:ununn-java-ai}
+    endpoint: oss-cn-beijing.aliyuncs.com
+    access-key-id: ${ALIYUN_OSS_ACCESS_KEY_ID}
+    access-key-secret: ${ALIYUN_OSS_ACCESS_KEY_SECRET}
+    bucket-name: ununn-java-ai
