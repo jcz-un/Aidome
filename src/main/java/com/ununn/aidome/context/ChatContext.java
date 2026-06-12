@@ -30,6 +30,18 @@ public class ChatContext {
     private Integer weekNumber;          // 第几周
     private Boolean isOddWeek;           // 是否单周
     
+    // ========== 教室查询专用字段 ==========
+    private Integer startSection;        // 开始节次
+    private Integer endSection;          // 结束节次
+    private String building;             // 楼栋
+    
+    // ========== 图书馆座位专用字段 ==========
+    private String floor;                // 楼层
+    private String zone;                 // 区域
+    private String bookingDate;          // 预约日期 (yyyy-MM-dd)
+    private String startTime;            // 开始时间 (HH:mm)
+    private String endTime;              // 结束时间 (HH:mm)
+    
     // ========== 图片识别专用字段 ==========
     private String imageUrl;             // 图片 URL
     private String imagePrompt;          // 图片识别提示词

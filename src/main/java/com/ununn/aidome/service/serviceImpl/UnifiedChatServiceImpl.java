@@ -3,18 +3,24 @@ package com.ununn.aidome.service.serviceImpl;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import com.ununn.aidome.ai.tool.AcademicInfoTool;
 import com.ununn.aidome.ai.tool.TimetableTool;
+import com.ununn.aidome.ai.tool.ClassroomTool;
+import com.ununn.aidome.ai.tool.LibSeatTool;
 import com.ununn.aidome.context.ChatContext;
 import com.ununn.aidome.enums.IntentType;
 import com.ununn.aidome.exception.AIServiceException;
 import com.ununn.aidome.exception.ValidationException;
 import com.ununn.aidome.pojo.ChatMessage;
 import com.ununn.aidome.pojo.Result;
+import com.ununn.aidome.service.IntentRecognitionService;
+import com.ununn.aidome.service.ParameterProcessingService;
 import com.ununn.aidome.service.UnifiedChatService;
 import com.ununn.aidome.strategy.ChatStrategy;
 import com.ununn.aidome.strategy.impl.AcademicInfoStrategy;
 import com.ununn.aidome.strategy.impl.CourseQueryStrategy;
 import com.ununn.aidome.strategy.impl.GeneralChatStrategy;
 import com.ununn.aidome.strategy.impl.ImageRecognitionStrategy;
+import com.ununn.aidome.strategy.impl.ClassroomQueryStrategy;
+import com.ununn.aidome.strategy.impl.LibrarySeatStrategy;
 import com.ununn.aidome.Util.SessionManagerUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -61,10 +67,28 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
     private AcademicInfoStrategy academicInfoStrategy;
     
     @Autowired
+    private ClassroomQueryStrategy classroomQueryStrategy;
+    
+    @Autowired
+    private LibrarySeatStrategy librarySeatStrategy;
+    
+    @Autowired
     private TimetableTool timetableTool;
     
     @Autowired
     private AcademicInfoTool academicInfoTool;
+    
+    @Autowired
+    private ClassroomTool classroomTool;
+    
+    @Autowired
+    private LibSeatTool libSeatTool;
+    
+    @Autowired
+    private IntentRecognitionService intentRecognitionService;
+    
+    @Autowired
+    private ParameterProcessingService parameterProcessingService;
     
     @Override
     public Result chatWithIntent(Integer userId, String sessionId, String message, Boolean webSearchEnabled) {
@@ -81,8 +105,11 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
         
         try {
             // 2. 识别意图
-            IntentType intent = classifyIntent(message);
-            log.info("识别到意图：{}, 用户消息：{}", intent, message);
+            IntentRecognitionService.IntentRecognitionResult recognitionResult = classifyIntent(message, sessionId);
+            IntentType intent = recognitionResult.getIntentType();
+            double confidence = recognitionResult.getConfidence();
+            String extractedParams = recognitionResult.getExtractedParams();
+            log.info("识别到意图：{}, 置信度：{}, 提取参数：{}, 用户消息：{}", intent, confidence, extractedParams, message);
             
             // 3. 创建聊天上下文
             ChatContext context = new ChatContext();
@@ -90,8 +117,13 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
             context.setSessionId(sessionId);
             context.setUserMessage(message);
             context.setIntentType(intent);
-            context.setIntentConfidence(1.0);
+            context.setIntentConfidence(confidence);
             context.setWebSearchEnabled(webSearchEnabled);
+            
+            // 保存提取的参数到 context，供参数处理服务使用
+            if (!extractedParams.isEmpty()) {
+                context.putExtension("extractedParams", extractedParams);
+            }
             
             // 4. 调用统一处理
             return chat(context);
@@ -113,8 +145,11 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
         CompletableFuture.runAsync(() -> {
             try {
                 // 1. 识别意图
-                IntentType intent = classifyIntent(message);
-                log.info("流式识别到意图：{}, 用户消息：{}", intent, message);
+                IntentRecognitionService.IntentRecognitionResult recognitionResult = classifyIntent(message, sessionId);
+                IntentType intent = recognitionResult.getIntentType();
+                double confidence = recognitionResult.getConfidence();
+                String extractedParams = recognitionResult.getExtractedParams();
+                log.info("流式识别到意图：{}, 置信度：{}, 提取参数：{}, 用户消息：{}", intent, confidence, extractedParams, message);
                 
                 // 2. 创建聊天上下文
                 ChatContext context = new ChatContext();
@@ -122,16 +157,54 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
                 context.setSessionId(sessionId);
                 context.setUserMessage(message);
                 context.setIntentType(intent);
-                context.setIntentConfidence(1.0);
+                context.setIntentConfidence(confidence);
                 context.setWebSearchEnabled(webSearchEnabled);
+                
+                // 3. 保存提取的参数
+                if (!extractedParams.isEmpty()) {
+                    context.putExtension("extractedParams", extractedParams);
+                }
                 
                 // 3. 选择策略
                 ChatStrategy strategy = selectStrategy(intent);
                 
-                // 4. 构建消息列表
+                // 4. 处理参数
+                ParameterProcessingService.ParameterProcessingResult paramResult = parameterProcessingService.processParameters(context);
+                if (paramResult.isRequiresFollowUp()) {
+                    // 需要追问用户
+                    try {
+                        emitter.send(paramResult.getFollowUpQuestion(), MediaType.TEXT_EVENT_STREAM);
+                        
+                        // 保存消息
+                        ChatMessage userMsg = new ChatMessage();
+                        userMsg.setSessionId(context.getSessionId());
+                        userMsg.setUserId(context.getUserId());
+                        userMsg.setRole("user");
+                        userMsg.setContent(context.getUserMessage());
+                        userMsg.setCreateTime(LocalDateTime.now());
+                        sessionManagerUtil.saveMessage(userMsg);
+                        
+                        ChatMessage aiMsg = new ChatMessage();
+                        aiMsg.setSessionId(context.getSessionId());
+                        aiMsg.setUserId(context.getUserId());
+                        aiMsg.setRole("assistant");
+                        aiMsg.setContent(paramResult.getFollowUpQuestion());
+                        aiMsg.setCreateTime(LocalDateTime.now());
+                        sessionManagerUtil.saveMessage(aiMsg);
+                        
+                        emitter.complete();
+                        return;
+                    } catch (IOException e) {
+                        log.error("发送追问失败", e);
+                        emitter.completeWithError(e);
+                        return;
+                    }
+                }
+                
+                // 5. 构建消息列表
                 List<Message> messages = buildMessages(context, strategy);
                 
-                // 5. 配置工具
+                // 6. 配置工具
                 var promptBuilder = chatClientWithMemory.prompt().messages(messages);
                 List<String> toolNames = strategy.getRequiredTools();
                 if (!toolNames.isEmpty()) {
@@ -143,7 +216,7 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
                     }
                 }
                 
-                // 6. 配置模型参数
+                // 7. 配置模型参数
                 DashScopeChatOptions options = DashScopeChatOptions.builder()
                         .withModel("qwen-max")
                         .withTemperature(0.7)
@@ -223,10 +296,29 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
             ChatStrategy strategy = selectStrategy(context.getIntentType());
             log.info("选择策略：{}, 处理用户消息：{}", strategy.getClass().getSimpleName(), context.getUserMessage());
             
-            // 3. 构建消息列表
+            // 3. 处理参数
+            ParameterProcessingService.ParameterProcessingResult paramResult = parameterProcessingService.processParameters(context);
+            if (paramResult.isRequiresFollowUp()) {
+                // 需要追问用户
+                log.info("需要追问用户: {}", paramResult.getFollowUpQuestion());
+                
+                // 保存用户消息
+                saveMessages(context, paramResult.getFollowUpQuestion());
+                
+                // 返回追问内容
+                Map<String, Object> response = Map.of(
+                    "sessionId", context.getSessionId(),
+                    "message", paramResult.getFollowUpQuestion(),
+                    "intentType", context.getIntentType().name(),
+                    "requiresFollowUp", true
+                );
+                return Result.success(response);
+            }
+            
+            // 4. 构建消息列表
             List<Message> messages = buildMessages(context, strategy);
             
-            // 4. 配置工具（只注册当前策略需要的工具）
+            // 5. 配置工具（只注册当前策略需要的工具）
             var promptBuilder = chatClientWithMemory.prompt().messages(messages);
             List<String> toolNames = strategy.getRequiredTools();
             if (!toolNames.isEmpty()) {
@@ -238,7 +330,7 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
                 }
             }
             
-            // 5. 配置模型参数
+            // 6. 配置模型参数
             DashScopeChatOptions options = DashScopeChatOptions.builder()
                     .withModel("qwen-max")
                     .withTemperature(0.7)
@@ -249,20 +341,20 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
                 log.info("启用联网搜索");
             }
             
-            // 6. 调用 AI
+            // 7. 调用 AI
             log.info("调用AI模型处理消息");
             String aiResponse = promptBuilder.options(options).call().content();
             log.info("AI响应: {}", aiResponse);
             
-            // 7. 后处理响应
+            // 8. 后处理响应
             String processedResponse = strategy.postProcessResponse(context, aiResponse);
             
-            // 8. 保存消息到 Redis
+            // 9. 保存消息到 Redis
             if (strategy.shouldSaveMessage()) {
                 saveMessages(context, processedResponse);
             }
             
-            // 9. 返回结果
+            // 10. 返回结果
             Map<String, Object> response = Map.of(
                 "sessionId", context.getSessionId(),
                 "message", processedResponse,
@@ -281,40 +373,23 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
     }
     
     /**
-     * 简单的意图分类
+     * 使用AI进行意图分类
      * @param message 用户消息
+     * @param sessionId 会话ID（用于从Redis获取历史上下文）
      * @return 意图类型
      */
-    private IntentType classifyIntent(String message) {
+    private IntentRecognitionService.IntentRecognitionResult classifyIntent(String message, String sessionId) {
         if (message == null || message.trim().isEmpty()) {
-            return IntentType.GENERAL_CHAT;
+            return new IntentRecognitionService.IntentRecognitionResult(IntentType.GENERAL_CHAT, 1.0, "");
         }
         
-        String lowerMsg = message.toLowerCase();
+        // 创建临时上下文用于意图识别
+        ChatContext tempContext = new ChatContext();
+        tempContext.setUserMessage(message);
+        tempContext.setSessionId(sessionId);  // 设置 sessionId，以便从 Redis 获取历史消息
         
-        // 学业信息查询关键词匹配（优先级高于课程查询）
-        for (String keyword : IntentType.ACADEMIC_INFO.getKeywords()) {
-            if (lowerMsg.contains(keyword)) {
-                return IntentType.ACADEMIC_INFO;
-            }
-        }
-        
-        // 课程查询关键词匹配
-        for (String keyword : IntentType.COURSE_QUERY.getKeywords()) {
-            if (lowerMsg.contains(keyword)) {
-                return IntentType.COURSE_QUERY;
-            }
-        }
-        
-        // 图片识别关键词匹配
-        for (String keyword : IntentType.IMAGE_RECOGNITION.getKeywords()) {
-            if (lowerMsg.contains(keyword)) {
-                return IntentType.IMAGE_RECOGNITION;
-            }
-        }
-        
-        // 默认普通聊天
-        return IntentType.GENERAL_CHAT;
+        // 调用AI意图识别服务
+        return intentRecognitionService.recognizeIntent(tempContext);
     }
     
     /**
@@ -327,6 +402,8 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
             case COURSE_QUERY -> courseQueryStrategy;
             case ACADEMIC_INFO -> academicInfoStrategy;
             case IMAGE_RECOGNITION -> imageRecognitionStrategy;
+            case CLASSROOM_QUERY -> classroomQueryStrategy;
+            case LIBRARY_SEAT -> librarySeatStrategy;
             case GENERAL_CHAT -> generalChatStrategy;
             default -> generalChatStrategy;
         };
@@ -418,6 +495,15 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
                         .build();
                 case "queryAcademicInfoFunction" -> FunctionToolCallback.builder("queryAcademicInfoFunction", academicInfoTool.queryAcademicInfoFunction())
                         .inputType(AcademicInfoTool.QueryAcademicInfoRequest.class)
+                        .build();
+                case "queryClassroomFunction" -> FunctionToolCallback.builder("queryClassroomFunction", classroomTool.queryClassroomFunction())
+                        .inputType(ClassroomTool.QueryClassroomRequest.class)
+                        .build();
+                case "querySeatFunction" -> FunctionToolCallback.builder("querySeatFunction", libSeatTool.querySeatFunction())
+                        .inputType(LibSeatTool.QuerySeatRequest.class)
+                        .build();
+                case "bookSeatFunction" -> FunctionToolCallback.builder("bookSeatFunction", libSeatTool.bookSeatFunction())
+                        .inputType(LibSeatTool.BookSeatRequest.class)
                         .build();
                 default -> {
                     log.warn("未知工具名称: {}", toolName);

@@ -18,6 +18,12 @@ public enum IntentType {
     /** 图片识别 */
     IMAGE_RECOGNITION("图片识别", Arrays.asList("图片", "识别", "照片", "图像")),
     
+    /** 教室查询 */
+    CLASSROOM_QUERY("教室查询", Arrays.asList("教室", "空闲教室", "空教室", "自习室", "上课教室")),
+    
+    /** 图书馆座位 */
+    LIBRARY_SEAT("图书馆座位", Arrays.asList("图书馆", "座位", "预约", "自习", "图书馆座位")),
+    
     /** 普通聊天 */
     GENERAL_CHAT("普通聊天", Collections.emptyList());
     
