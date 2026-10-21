@@ -28,7 +28,7 @@ spring:
           model: gpt-3.5-turbo
           temperature: 0.7
     dashscope:
-      api-key: ${DASHSCOPE_API_KEY:DASHSCOPE_API_KEY}
+      api-key: ${DASHSCOPE_API_KEY}
       chat:
         options:
           model: qwen3-max-2026-01-23
@@ -59,9 +59,13 @@ mybatis:
     map-underscore-to-camel-case: true
   mapper-locations: classpath:mapper/*.xml
 dashscope:
-  api-key: ${DASHSCOPE_API_KEY:DASHSCOPE_API_KEY}
+  api-key: ${DASHSCOPE_API_KEY}
 server:
   port: 8080
+# 日志同时输出到控制台和 app.log（已加入 .gitignore，不进版本库）
+logging:
+  file:
+    name: app.log
 sky:
   alioss:
     endpoint: oss-cn-beijing.aliyuncs.com
