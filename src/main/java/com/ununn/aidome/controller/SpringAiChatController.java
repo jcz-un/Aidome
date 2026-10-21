@@ -36,7 +36,7 @@ public class SpringAiChatController {
     @Autowired
     private ChatCommonService chatCommonService;
     
-    // ⭐ 不再需要 SpringAiChatService 和 IntentRouter
+    // 统一使用 UnifiedChatService 处理AI对话
 
     /**
      * 发送消息给AI（同步方式）

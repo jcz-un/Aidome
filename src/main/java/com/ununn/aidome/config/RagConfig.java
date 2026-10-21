@@ -58,8 +58,7 @@
 //                .initializeSchema(false) // 禁用自动创建索引
 //                .build();
 //
-//        System.out.println("✅ RedisVectorStore 配置完成");
-//        System.out.println("⚠️  请确保已手动创建Redis索引");
+//        log.info("RedisVectorStore 配置完成, 请确保已手动创建Redis索引");
 //
 //        return vectorStore;
 //    }
@@ -71,6 +70,7 @@ package com.ununn.aidome.config;
 import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
 import com.alibaba.cloud.ai.dashscope.embedding.DashScopeEmbeddingModel;
 import com.alibaba.cloud.ai.dashscope.embedding.DashScopeEmbeddingOptions;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.MetadataMode;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -81,6 +81,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestClient;
 import redis.clients.jedis.JedisPooled;
 
+@Slf4j
 @Configuration
 public class RagConfig {
 
@@ -95,13 +96,10 @@ public class RagConfig {
 
     @Bean
     public DashScopeApi dashScopeApi() {
-        System.out.println("========== 初始化 DashScopeApi ==========");
-        System.out.println("API Key: " + (apiKey != null && apiKey.length() > 8 ? apiKey.substring(0, 8) + "..." : "null或空"));
-        System.out.println("===========================================");
+        log.info("初始化 DashScopeApi, API Key: {}", apiKey != null && apiKey.length() > 8 ? apiKey.substring(0, 8) + "..." : "null或空");
         
         if (apiKey == null || apiKey.isEmpty() || "DASHSCOPE_API_KEY".equals(apiKey)) {
-            System.err.println("⚠️  警告: DASHSCOPE_API_KEY 未正确配置！");
-            System.err.println("请设置环境变量: $env:DASHSCOPE_API_KEY=\"sk-your-api-key\"");
+            log.warn("DASHSCOPE_API_KEY 未正确配置！请设置环境变量: $env:DASHSCOPE_API_KEY=\"sk-your-api-key\"");
         }
         
         return new DashScopeApi.Builder()
@@ -112,15 +110,11 @@ public class RagConfig {
 
     @Bean
     public EmbeddingModel embeddingModel(DashScopeApi dashScopeApi) {
-        // 显式指定 Embedding 模型
-        System.out.println("========== 初始化 EmbeddingModel ==========");
-        System.out.println("API Key: " + (apiKey != null && apiKey.length() > 8 ? apiKey.substring(0, 8) + "..." : "null或空"));
-        System.out.println("===========================================");
+        log.info("初始化 EmbeddingModel, API Key: {}", apiKey != null && apiKey.length() > 8 ? apiKey.substring(0, 8) + "..." : "null或空");
         
         // 创建 Embedding 选项，使用正确的模型名称
-        // DashScope 支持的模型: text-embedding-v1, text-embedding-v2
         DashScopeEmbeddingOptions options = DashScopeEmbeddingOptions.builder()
-                .withModel("text-embedding-v1")  // 使用 v2 版本
+                .withModel("text-embedding-v1")
                 .build();
         
         return new DashScopeEmbeddingModel(
@@ -135,20 +129,18 @@ public class RagConfig {
         return new JedisPooled(host, port);
     }
 
-    // ================== 1.0.0.2 官方标准写法（核心修复点）==================
     @Bean
     public VectorStore vectorStore(JedisPooled jedis, EmbeddingModel embeddingModel) {
         return RedisVectorStore.builder(jedis, embeddingModel)
-                .indexName("rag_index")          // 索引名
-                .prefix("rag:vector")             // Key前缀
-                // 🔥 必须手动声明所有元数据字段！不声明=读不到（1.0.0+强制要求）
+                .indexName("rag_index")
+                .prefix("rag:vector")
                 .metadataFields(
                         RedisVectorStore.MetadataField.tag("college"),
                         RedisVectorStore.MetadataField.tag("major"),
                         RedisVectorStore.MetadataField.tag("level"),
                         RedisVectorStore.MetadataField.tag("dimension")
                 )
-                .initializeSchema(true)  // 自动重建索引
+                .initializeSchema(true)
                 .build();
     }
 }

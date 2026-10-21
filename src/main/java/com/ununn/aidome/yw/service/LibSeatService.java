@@ -72,4 +72,17 @@ public interface LibSeatService {
      * @return 预约记录列表
      */
     Result<List<LibSeatBooking>> getUserBookingsByDate(Integer userId, LocalDate bookingDate);
+
+    /**
+     * 处理过期预约（定时任务调用）
+     * 将已过期但未使用的预约标记为违约
+     */
+    void processExpiredBookings();
+
+    /**
+     * 检查用户是否可以预约（3天内无违约记录）
+     * @param userId 用户ID
+     * @return 检查结果，成功表示可以预约
+     */
+    Result<String> checkBookingEligibility(Integer userId);
 }

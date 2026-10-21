@@ -73,11 +73,11 @@ public interface LibSeatBookingMapper {
     int updateStatus(@Param("id") Integer id, @Param("status") Integer status);
     
     /**
-     * 查询用户的所有预约记录
+     * 查询用户的所有有效预约记录（排除已取消的）
      * @param userId 用户ID
      * @return 预约记录列表
      */
-    @Select("SELECT * FROM yw_lib_seat_booking WHERE user_id = #{userId} ORDER BY booking_date DESC, start_time DESC")
+    @Select("SELECT * FROM yw_lib_seat_booking WHERE user_id = #{userId} AND status IN (1, 2) ORDER BY booking_date DESC, start_time DESC")
     List<LibSeatBooking> selectByUserId(@Param("userId") Integer userId);
     
     /**
@@ -88,4 +88,37 @@ public interface LibSeatBookingMapper {
      */
     @Update("UPDATE yw_lib_seat_booking SET status = 0 WHERE id = #{id} AND user_id = #{userId} AND status = 1")
     int cancelBooking(@Param("id") Integer id, @Param("userId") Integer userId);
+
+    /**
+     * 查询已过期但未处理的预约（预约时间已过1小时，状态仍为已预约）
+     * 用于定时任务标记为违约
+     * @return 过期预约列表
+     */
+    @Select("SELECT * FROM yw_lib_seat_booking WHERE status = 1 " +
+            "AND (booking_date < CURDATE() OR " +
+            "(booking_date = CURDATE() AND ADDTIME(start_time, '01:00:00') < CURTIME()))")
+    List<LibSeatBooking> selectExpiredBookings();
+
+    /**
+     * 检查用户在指定天数内是否有违约记录
+     * @param userId 用户ID
+     * @param days 天数
+     * @return 违约记录数量
+     */
+    @Select("SELECT COUNT(*) FROM yw_lib_seat_booking WHERE user_id = #{userId} AND status = 3 " +
+            "AND booking_date >= DATE_SUB(CURDATE(), INTERVAL #{days} DAY)")
+    int countRecentViolations(@Param("userId") Integer userId, @Param("days") int days);
+
+    /**
+     * 批量将过期预约标记为违约
+     * @param ids 预约记录ID列表
+     * @return 影响行数
+     */
+    @Update("<script>" +
+            "UPDATE yw_lib_seat_booking SET status = 3, update_time = NOW() WHERE id IN " +
+            "<foreach collection='ids' item='id' open='(' separator=',' close=')'>" +
+            "#{id}" +
+            "</foreach>" +
+            "</script>")
+    int batchMarkAsViolation(@Param("ids") List<Integer> ids);
 }

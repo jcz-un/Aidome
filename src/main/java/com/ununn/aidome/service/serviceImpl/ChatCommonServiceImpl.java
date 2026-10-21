@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit;
  *
  * 作用：
  * 1. 实现ChatCommonService接口的所有通用方法
- * 2. 被ChatServiceImpl和SpringAiChatServiceImpl复用
+ * 2. 被UnifiedChatServiceImpl和SpringAiChatController复用
  * 3. 统一管理会话、消息、历史记录等与AI对话无关的操作
  */
 @Service

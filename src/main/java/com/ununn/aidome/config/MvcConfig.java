@@ -19,6 +19,10 @@ public class MvcConfig implements WebMvcConfigurer {
         registry.addInterceptor(new RefreshTokenInterceptor(stringRedisTemplate)).
                 addPathPatterns("/image-recognition/**", "/chat/**", "/avatar/**", "/user/**", "/springai/**", "/api/semester/**","/api/timetable/ai/**").
                 excludePathPatterns("/user/login", "/user/register", "/user/code").order(0);
+
+        // 请求结束后清理 UserContext，防止 ThreadLocal 泄漏
+        registry.addInterceptor(new UserContextCleanupInterceptor())
+                .addPathPatterns("/**").order(1);
     }
 
     @Override

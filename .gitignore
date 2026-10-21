@@ -39,3 +39,8 @@ build/
 ### JVM Crash Logs ###
 hs_err_pid*.log
 replay_pid*.log
+
+### 本地启动脚本与运行日志（start.bat 内含明文 API Key，禁止提交）###
+start.bat
+app.log
+*.log

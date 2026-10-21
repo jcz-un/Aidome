@@ -2,7 +2,6 @@ package com.ununn.aidome.Util;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ununn.aidome.pojo.ChatMessage;
-import com.ununn.aidome.dataProcess.service.DataProcessService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;

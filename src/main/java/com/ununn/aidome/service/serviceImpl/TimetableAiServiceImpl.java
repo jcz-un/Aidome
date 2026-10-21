@@ -6,6 +6,7 @@ import com.ununn.aidome.pojo.Timetable;
 import com.ununn.aidome.pojo.User;
 import com.ununn.aidome.service.TimetableAiService;
 import com.ununn.aidome.service.TimetableService;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
@@ -30,6 +31,7 @@ import static com.ununn.aidome.Util.RedisConstants.TIMETABLE_PREVIEW_KEY;
  * AI课表解析服务实现类
  * 使用Spring AI大模型解析PDF课表
  */
+@Slf4j
 @Service
 public class TimetableAiServiceImpl implements TimetableAiService {
 
@@ -94,9 +96,8 @@ PDF文本：
             
             // 1. 提取PDF文本
             String pdfText = extractTextFromPdf(file);
-            System.out.println("========== PDF文本提取完成 ==========");
-            System.out.println("PDF文本长度: " + pdfText.length());
-            System.out.println("PDF文本前500字符: " + pdfText.substring(0, Math.min(500, pdfText.length())));
+            log.info("PDF文本提取完成, 文本长度: {}", pdfText.length());
+            log.debug("PDF文本前500字符: {}", pdfText.substring(0, Math.min(500, pdfText.length())));
 
             // 2. 构建AI提示词并调用
             String prompt = String.format(AI_PROMPT, pdfText);
@@ -105,8 +106,7 @@ PDF文本：
                     .call()
                     .content();
 
-            System.out.println("========== AI分析完成 ==========");
-            System.out.println("AI响应: " + aiResponse);
+            log.info("AI分析完成, 响应长度: {}", aiResponse != null ? aiResponse.length() : 0);
 
             //3. 将数据保存到redis中
             stringRedisTemplate.opsForValue().set(
@@ -120,7 +120,7 @@ PDF文本：
             return parseAiResponseToTimetableList(aiResponse, null, null);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("AI解析预览失败", e);
             throw new RuntimeException("AI解析失败: " + e.getMessage());
         }
     }
@@ -142,20 +142,18 @@ PDF文本：
 
         try {
             if (aiResponse == null) {
-                System.out.println("未命中缓存，开始重新解析PDF...");
+                log.info("未命中缓存，开始重新解析PDF...");
                 // 如果缓存中没有（比如用户直接点导入没点预览），则执行解析逻辑
                 String pdfText = extractTextFromPdf(file);
-                System.out.println("========== PDF文本提取完成 ==========");
-                System.out.println("PDF文本长度: " + pdfText.length());
-                System.out.println("PDF文本前500字符: " + pdfText.substring(0, Math.min(500, pdfText.length())));
+                log.info("PDF文本提取完成, 文本长度: {}", pdfText.length());
+                log.debug("PDF文本前500字符: {}", pdfText.substring(0, Math.min(500, pdfText.length())));
 
                 String prompt = String.format(AI_PROMPT, pdfText);
                 aiResponse = chatClient.prompt()
                         .user(prompt)
                         .call()
                         .content();
-                System.out.println("========== AI分析完成 ==========");
-                System.out.println("AI响应: " + aiResponse);
+                log.info("AI分析完成, 响应长度: {}", aiResponse != null ? aiResponse.length() : 0);
             } else {
                 // 保存到数据库
                 return saveFromAiResponse(aiResponse, userId, semesterStartDate);
@@ -168,7 +166,7 @@ PDF文本：
             return  saveFromAiResponse(aiResponse, userId, semesterStartDate);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("AI解析失败", e);
             return "解析失败: " + e.getMessage();
         }
     }
@@ -183,7 +181,7 @@ PDF文本：
      */
     @Override
     public String saveFromAiResponse(String jsonResponse, Integer userId, LocalDate semesterStartDate) {
-        System.out.println("========== saveFromAiResponse 开学时间: " + semesterStartDate + " ==========");
+        log.info("saveFromAiResponse 开学时间: {}", semesterStartDate);
         try {
             // 解析JSON响应并转换为课程列表
             List<Timetable> timetableList = parseAiResponseToTimetableList(jsonResponse, userId, semesterStartDate);
@@ -201,7 +199,7 @@ PDF文本：
             return "解析成功，共保存 " + savedCount + " 门课程";
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("保存AI解析结果失败", e);
             return "保存失败: " + e.getMessage();
         }
     }
@@ -223,8 +221,7 @@ PDF文本：
             com.alibaba.fastjson2.JSONObject jsonObject = com.alibaba.fastjson2.JSON.parseObject(jsonResponse);
             List<com.alibaba.fastjson2.JSONObject> courses = jsonObject.getJSONArray("courses").toList(com.alibaba.fastjson2.JSONObject.class);
 
-            System.out.println("========== 解析AI响应 ==========");
-            System.out.println("课程数量: " + courses.size());
+            log.info("解析AI响应, 课程数量: {}", courses.size());
 
             for (com.alibaba.fastjson2.JSONObject courseJson : courses) {
                 Timetable timetable = new Timetable();
@@ -241,18 +238,14 @@ PDF文本：
 
                 timetableList.add(timetable);
 
-                System.out.println("\n解析课程:");
-                System.out.println("  课程名称: " + timetable.getCourseName());
-                System.out.println("  星期几: " + timetable.getWeekDay());
-                System.out.println("  节次: " + timetable.getClassStart() + "-" + timetable.getClassEnd());
-                System.out.println("  周次: " + timetable.getWeekRange());
-                System.out.println("  教室: " + timetable.getClassroom());
-                System.out.println("  教师: " + timetable.getTeacherName());
-                System.out.println("  开学时间: " + timetable.getSemesterStartDate());
+                log.debug("解析课程: {} | 星期{} | 第{}-{}节 | {} | {} | {} | 开学时间:{}",
+                        timetable.getCourseName(), timetable.getWeekDay(),
+                        timetable.getClassStart(), timetable.getClassEnd(),
+                        timetable.getWeekRange(), timetable.getClassroom(),
+                        timetable.getTeacherName(), timetable.getSemesterStartDate());
             }
         } catch (Exception e) {
-            System.err.println("解析AI响应失败: " + e.getMessage());
-            e.printStackTrace();
+            log.error("解析AI响应失败", e);
         }
 
         return timetableList;

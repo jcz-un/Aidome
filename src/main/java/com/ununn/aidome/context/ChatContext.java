@@ -1,5 +1,6 @@
 package com.ununn.aidome.context;
 
+import com.ununn.aidome.ai.reasoning.PlanResult;
 import com.ununn.aidome.enums.IntentType;
 import lombok.Data;
 
@@ -24,6 +25,9 @@ public class ChatContext {
     private IntentType intentType;       // 意图类型枚举
     private Double intentConfidence;     // 意图置信度 (0-1)
     
+    // ========== 规划结果 ==========
+    private PlanResult planResult;       // Plan-and-Solve 规划结果
+
     // ========== 课程查询专用字段 ==========
     private String queryDate;            // 查询日期 (yyyy-MM-dd)
     private String weekDay;              // 星期几

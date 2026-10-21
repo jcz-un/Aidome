@@ -3,6 +3,7 @@ package com.ununn.aidome.controller;
 import com.ununn.aidome.Util.UserContext;
 import com.ununn.aidome.pojo.Result;
 import com.ununn.aidome.service.UserSemesterService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
@@ -12,6 +13,7 @@ import java.time.LocalDate;
 /**
  * 用户学期信息控制器
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/semester")
 public class UserSemesterController {
@@ -34,7 +36,7 @@ public class UserSemesterController {
                 return Result.error("未设置开学时间");
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("获取开学时间失败", e);
             return Result.error("获取开学时间失败: " + e.getMessage());
         }
     }
@@ -47,7 +49,6 @@ public class UserSemesterController {
      */
     @PostMapping("/start-date")
     public Result<String> saveSemesterStartDate(
-//            @RequestParam("userId") Integer userId,
             @RequestParam("semesterStartDate") @DateTimeFormat(pattern = "yyyy-MM-dd") LocalDate semesterStartDate,
             @RequestParam(value = "semesterName", required = false, defaultValue = "") String semesterName) {
 
@@ -60,7 +61,7 @@ public class UserSemesterController {
                 return Result.error("开学时间设置失败");
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("保存开学时间失败", e);
             return Result.error("保存开学时间失败: " + e.getMessage());
         }
     }

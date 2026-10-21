@@ -30,7 +30,7 @@ public class SessionManagerUtil {
 
     /**
      * 保存消息到Redis（同时保存完整格式和精简格式）
-     * 调用者：ChatServiceImpl（sendMessage、switchSession、useSession方法）
+     * 调用者：UnifiedChatServiceImpl（sendMessage、switchSession、useSession方法）
      * 作用：将聊天消息同时以完整格式和精简格式保存到Redis中，实现双重数据存储
      * @param fullMessage 完整的聊天消息对象
      * @throws JsonProcessingException JSON序列化异常
@@ -68,7 +68,7 @@ public class SessionManagerUtil {
 
     /**
      * 从Redis获取完整格式的会话消息（用于前端渲染）
-     * 调用者：ChatServiceImpl（getChatHistory、saveSessionToDatabase、saveAndClearSession方法）
+     * 调用者：UnifiedChatServiceImpl（getChatHistory、saveSessionToDatabase、saveAndClearSession方法）
      * 作用：获取Redis中存储的完整格式会话消息，用于前端渲染显示所有消息详情
      * @param sessionId 会话ID
      * @return 完整的聊天消息列表
@@ -134,7 +134,7 @@ public class SessionManagerUtil {
 
     /**
      * 清除会话数据
-     * 调用者：ChatServiceImpl（clearSession方法）
+     * 调用者：UnifiedChatServiceImpl（clearSession方法）
      * 作用：清除指定会话的所有数据，包括完整格式和精简格式
      * @param sessionId 会话ID
      * @param userId 用户ID

@@ -10,7 +10,7 @@ import java.util.List;
  *
  * 作用：
  * 1. 提供聊天功能中与AI对话无关的通用操作
- * 2. 被ChatServiceImpl和SpringAiChatServiceImpl复用
+ * 2. 被UnifiedChatService和SpringAiChatController复用
  * 3. 统一管理会话、消息、历史记录等操作
  *
  * 包含功能：

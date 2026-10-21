@@ -4,6 +4,7 @@ import com.ununn.aidome.Util.UserContext;
 import com.ununn.aidome.pojo.Result;
 import com.ununn.aidome.pojo.Timetable;
 import com.ununn.aidome.service.TimetableAiService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
@@ -15,6 +16,7 @@ import java.util.List;
 /**
  * AI课表解析控制器
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/timetable/ai")
 public class TimetableAiController {
@@ -36,7 +38,7 @@ public class TimetableAiController {
             }
             return Result.success(timetableList);
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("AI解析预览失败", e);
             return Result.error("AI解析失败: " + e.getMessage());
         }
     }
@@ -51,7 +53,7 @@ public class TimetableAiController {
     public Result<String> analyzePdfWithAi(
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "semesterStartDate", required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") LocalDate semesterStartDate) {
-        System.out.println("========== 接收到的开学时间: " + semesterStartDate + " ==========");
+        log.info("接收到开学时间: {}", semesterStartDate);
         try {
             Integer userId = UserContext.getUserId();
             String result = timetableAiService.analyzePdfWithAi(file, userId, semesterStartDate);
@@ -61,7 +63,7 @@ public class TimetableAiController {
                 return Result.error(result);
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("AI解析失败", e);
             return Result.error("AI解析失败: " + e.getMessage());
         }
     }
@@ -85,7 +87,7 @@ public class TimetableAiController {
                 return Result.error(result);
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("保存AI解析结果失败", e);
             return Result.error("保存失败: " + e.getMessage());
         }
     }

@@ -172,13 +172,20 @@ public class LibSeatServiceImpl implements LibSeatService {
             if (request.getBookingDate() == null) {
                 return Result.error("预约日期不能为空");
             }
-            if (request.getStartTime() == null || request.getEndTime() == null) {
-                return Result.error("开始时间和结束时间不能为空");
+            if (request.getStartTime() == null) {
+                return Result.error("开始时间不能为空");
+            }
+
+            // 检查用户是否有违约记录（3天内）
+            Result<String> eligibilityCheck = checkBookingEligibility(userId);
+            if (eligibilityCheck.getCode() != 1) {
+                return eligibilityCheck;
             }
             
-            // 验证开始时间是否早于结束时间
-            if (request.getStartTime().isAfter(request.getEndTime()) || 
-                request.getStartTime().equals(request.getEndTime())) {
+            // 验证开始时间是否早于结束时间（endTime可选）
+            if (request.getEndTime() != null &&
+                (request.getStartTime().isAfter(request.getEndTime()) ||
+                 request.getStartTime().equals(request.getEndTime()))) {
                 return Result.error("开始时间必须早于结束时间");
             }
             
@@ -197,16 +204,17 @@ public class LibSeatServiceImpl implements LibSeatService {
                 return Result.error("不能预约过去的日期");
             }
             
-            // 检查时间段是否有冲突
-            int conflictCount = libSeatBookingMapper.countConflictingBookings(
-                request.getSeatId(),
-                request.getBookingDate(),
-                request.getStartTime().toString(),
-                request.getEndTime().toString()
-            );
-            
-            if (conflictCount > 0) {
-                return Result.error("该时间段已被预约，请选择其他时间段");
+            // 检查时间段是否有冲突（endTime可选，为空时默认startTime+1小时）
+            if (request.getEndTime() != null) {
+                int conflictCount = libSeatBookingMapper.countConflictingBookings(
+                    request.getSeatId(),
+                    request.getBookingDate(),
+                    request.getStartTime().toString(),
+                    request.getEndTime().toString()
+                );
+                if (conflictCount > 0) {
+                    return Result.error("该时间段已被预约，请选择其他时间段");
+                }
             }
             
             // 检查用户在同一时间段是否已有预约
@@ -330,6 +338,56 @@ public class LibSeatServiceImpl implements LibSeatService {
         } catch (Exception e) {
             log.error("查询用户指定日期预约失败: {}", e.getMessage(), e);
             return Result.error("查询用户指定日期预约失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 处理过期预约（定时任务调用）
+     * 将已过期但未使用的预约标记为违约(status=3)
+     */
+    @Override
+    @Transactional
+    public void processExpiredBookings() {
+        try {
+            // 查询所有已过期但状态仍为"已预约"(status=1)的记录
+            List<LibSeatBooking> expiredBookings = libSeatBookingMapper.selectExpiredBookings();
+
+            if (expiredBookings == null || expiredBookings.isEmpty()) {
+                log.debug("没有需要处理的过期预约");
+                return;
+            }
+
+            // 批量标记为违约
+            List<Integer> ids = expiredBookings.stream()
+                    .map(LibSeatBooking::getId)
+                    .toList();
+
+            int updated = libSeatBookingMapper.batchMarkAsViolation(ids);
+            log.info("处理过期预约: 共{}条，成功标记{}条为违约", expiredBookings.size(), updated);
+        } catch (Exception e) {
+            log.error("处理过期预约失败", e);
+        }
+    }
+
+    /**
+     * 检查用户是否可以预约（3天内无违约记录）
+     */
+    @Override
+    public Result<String> checkBookingEligibility(Integer userId) {
+        try {
+            if (userId == null) {
+                return Result.error("用户ID不能为空");
+            }
+
+            int violationCount = libSeatBookingMapper.countRecentViolations(userId, 3);
+            if (violationCount > 0) {
+                return Result.error("您在3天内有违约记录，暂时无法预约。请3天后再试。");
+            }
+
+            return Result.success("可以预约");
+        } catch (Exception e) {
+            log.error("检查预约资格失败: {}", e.getMessage(), e);
+            return Result.error("检查预约资格失败: " + e.getMessage());
         }
     }
 }

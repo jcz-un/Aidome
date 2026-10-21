@@ -1,7 +1,9 @@
 package com.ununn.aidome.ai.tool;
 
 import com.ununn.aidome.Util.UserContext;
+import com.ununn.aidome.ai.reasoning.CancelBookingGuard;
 import com.ununn.aidome.pojo.Result;
+import com.ununn.aidome.yw.pojo.LibSeatBooking;
 import com.ununn.aidome.yw.pojo.LibSeatBookingRequest;
 import com.ununn.aidome.yw.pojo.LibSeatResource;
 import com.ununn.aidome.yw.pojo.LibSeatVO;
@@ -24,6 +26,9 @@ public class LibSeatTool {
     
     @Autowired
     private LibSeatService libSeatService;
+
+    @Autowired
+    private CancelBookingGuard cancelBookingGuard;
     
     /**
      * 查询空闲座位
@@ -108,6 +113,23 @@ public class LibSeatTool {
                 if (result.getCode() == 1) {
                     response.setStatus("success");
                     response.setMessage("预约成功");
+                    response.setSeatId(request.getSeatId());
+                    response.setBookingDate(bookingDate.toString());
+                    response.setStartTime(request.getStartTime() != null ? request.getStartTime().toString() : null);
+
+                    // 查询座位详细信息（楼层、区域、座位号）
+                    try {
+                        com.ununn.aidome.yw.pojo.LibSeatVO seatDetail = libSeatService.getSeatDetail(request.getSeatId(), bookingDate).getData();
+                        if (seatDetail != null) {
+                            response.setFloor(seatDetail.getFloor());
+                            response.setZone(seatDetail.getZone());
+                            response.setSeatNumber(seatDetail.getSeatNumber());
+                        }
+                    } catch (Exception e) {
+                        log.warn("查询座位详情失败，使用请求参数填充", e);
+                        response.setFloor(request.getFloor());
+                        response.setZone(request.getZone());
+                    }
                 } else {
                     response.setStatus("error");
                     response.setMessage(result.getMsg());
@@ -120,6 +142,135 @@ public class LibSeatTool {
             
             return response;
         };
+    }
+
+    /**
+     * 查询用户预约记录
+     */
+    public java.util.function.Function<GetUserBookingsRequest, GetUserBookingsResponse> getUserBookingsFunction() {
+        return request -> {
+            Integer userId = UserContext.getUserId();
+            if (userId == null) {
+                GetUserBookingsResponse errorResponse = new GetUserBookingsResponse();
+                errorResponse.setStatus("error");
+                errorResponse.setMessage("用户未登录");
+                return errorResponse;
+            }
+
+            GetUserBookingsResponse response = new GetUserBookingsResponse();
+            try {
+                Result<List<LibSeatBooking>> result = libSeatService.getUserBookings(userId);
+                if (result.getCode() == 1) {
+                    response.setStatus("success");
+                    response.setMessage("查询成功");
+                    response.setBookings(result.getData());
+                    // 登记候选：后续取消只允许操作这份列表里的记录
+                    cancelBookingGuard.rememberCandidates(userId, result.getData());
+                } else {
+                    response.setStatus("error");
+                    response.setMessage(result.getMsg());
+                }
+            } catch (Exception e) {
+                log.error("查询用户预约记录失败", e);
+                response.setStatus("error");
+                response.setMessage("查询失败：" + e.getMessage());
+            }
+            return response;
+        };
+    }
+
+    /**
+     * 取消预约座位
+     */
+    public java.util.function.Function<CancelBookingRequest, CancelBookingResponse> cancelBookingFunction() {
+        return request -> {
+            Integer userId = UserContext.getUserId();
+            if (userId == null) {
+                CancelBookingResponse errorResponse = new CancelBookingResponse();
+                errorResponse.setStatus("error");
+                errorResponse.setMessage("用户未登录");
+                return errorResponse;
+            }
+
+            CancelBookingResponse response = new CancelBookingResponse();
+            try {
+                // 白名单 + 序号对齐：模型可能把座位ID当预约ID，这里以用户看到的列表为准
+                CancelBookingGuard.Decision decision = cancelBookingGuard.check(
+                        userId, UserContext.getUserMessage(), request.getBookingId());
+                if (!decision.isAllowed()) {
+                    response.setStatus("error");
+                    response.setMessage(decision.getMessage());
+                    return response;
+                }
+
+                Integer bookingId = decision.getTargetId();
+                Result<String> result = libSeatService.cancelBooking(userId, bookingId);
+                if (result.getCode() == 1) {
+                    cancelBookingGuard.removeCandidate(userId, bookingId);
+                    response.setStatus("success");
+                    response.setMessage("取消预约成功");
+                } else {
+                    response.setStatus("error");
+                    response.setMessage(result.getMsg());
+                }
+            } catch (Exception e) {
+                log.error("取消预约失败", e);
+                response.setStatus("error");
+                response.setMessage("取消失败：" + e.getMessage());
+            }
+            return response;
+        };
+    }
+
+    /**
+     * 查询用户预约记录请求类
+     */
+    @com.fasterxml.jackson.annotation.JsonClassDescription("查询用户预约记录请求参数")
+    public static class GetUserBookingsRequest {
+    }
+
+    /**
+     * 查询用户预约记录响应类
+     */
+    @com.fasterxml.jackson.annotation.JsonClassDescription("查询用户预约记录响应结果")
+    public static class GetUserBookingsResponse {
+        private String status;
+        private String message;
+        private List<LibSeatBooking> bookings;
+
+        public String getStatus() { return status; }
+        public void setStatus(String status) { this.status = status; }
+        public String getMessage() { return message; }
+        public void setMessage(String message) { this.message = message; }
+        public List<LibSeatBooking> getBookings() { return bookings; }
+        public void setBookings(List<LibSeatBooking> bookings) { this.bookings = bookings; }
+    }
+
+    /**
+     * 取消预约请求类
+     */
+    @com.fasterxml.jackson.annotation.JsonClassDescription("取消预约请求参数")
+    public static class CancelBookingRequest {
+        @com.fasterxml.jackson.annotation.JsonProperty(required = true)
+        @com.fasterxml.jackson.annotation.JsonPropertyDescription("预约记录ID")
+        private Integer bookingId;
+
+        public Integer getBookingId() { return bookingId; }
+        public void setBookingId(Integer bookingId) { this.bookingId = bookingId; }
+    }
+
+    /**
+     * 取消预约响应类
+     */
+    @com.fasterxml.jackson.annotation.JsonClassDescription("取消预约响应结果")
+    public static class CancelBookingResponse {
+        private String status;
+        private String message;
+
+        public String getStatus() { return status; }
+        public void setStatus(String status) { this.status = status; }
+        public String getMessage() { return message; }
+        public void setMessage(String message) { this.message = message; }
     }
     
     /**
@@ -211,9 +362,17 @@ public class LibSeatTool {
         @com.fasterxml.jackson.annotation.JsonPropertyDescription("预约开始时间，格式：HH:mm")
         private LocalTime startTime;
         
-        @com.fasterxml.jackson.annotation.JsonProperty(required = true)
-        @com.fasterxml.jackson.annotation.JsonPropertyDescription("预约结束时间，格式：HH:mm，必须晚于开始时间")
+        @com.fasterxml.jackson.annotation.JsonProperty(required = false)
+        @com.fasterxml.jackson.annotation.JsonPropertyDescription("预约结束时间，格式：HH:mm（图书馆刷卡进出，离开时自动释放，可不填）")
         private LocalTime endTime;
+
+        @com.fasterxml.jackson.annotation.JsonProperty(required = false)
+        @com.fasterxml.jackson.annotation.JsonPropertyDescription("楼层（选填，用于响应展示）")
+        private String floor;
+
+        @com.fasterxml.jackson.annotation.JsonProperty(required = false)
+        @com.fasterxml.jackson.annotation.JsonPropertyDescription("区域（选填，用于响应展示）")
+        private String zone;
 
         public Integer getSeatId() {
             return seatId;
@@ -246,6 +405,11 @@ public class LibSeatTool {
         public void setEndTime(LocalTime endTime) {
             this.endTime = endTime;
         }
+
+        public String getFloor() { return floor; }
+        public void setFloor(String floor) { this.floor = floor; }
+        public String getZone() { return zone; }
+        public void setZone(String zone) { this.zone = zone; }
     }
     
     /**
@@ -260,20 +424,44 @@ public class LibSeatTool {
         @com.fasterxml.jackson.annotation.JsonPropertyDescription("消息")
         private String message;
 
-        public String getStatus() {
-            return status;
-        }
+        @com.fasterxml.jackson.annotation.JsonPropertyDescription("预约记录ID")
+        private Integer bookingId;
 
-        public void setStatus(String status) {
-            this.status = status;
-        }
+        @com.fasterxml.jackson.annotation.JsonPropertyDescription("座位ID")
+        private Integer seatId;
 
-        public String getMessage() {
-            return message;
-        }
+        @com.fasterxml.jackson.annotation.JsonPropertyDescription("楼层")
+        private String floor;
 
-        public void setMessage(String message) {
-            this.message = message;
-        }
+        @com.fasterxml.jackson.annotation.JsonPropertyDescription("区域")
+        private String zone;
+
+        @com.fasterxml.jackson.annotation.JsonPropertyDescription("座位号")
+        private String seatNumber;
+
+        @com.fasterxml.jackson.annotation.JsonPropertyDescription("预约日期")
+        private String bookingDate;
+
+        @com.fasterxml.jackson.annotation.JsonPropertyDescription("开始时间")
+        private String startTime;
+
+        public String getStatus() { return status; }
+        public void setStatus(String status) { this.status = status; }
+        public String getMessage() { return message; }
+        public void setMessage(String message) { this.message = message; }
+        public Integer getBookingId() { return bookingId; }
+        public void setBookingId(Integer bookingId) { this.bookingId = bookingId; }
+        public Integer getSeatId() { return seatId; }
+        public void setSeatId(Integer seatId) { this.seatId = seatId; }
+        public String getFloor() { return floor; }
+        public void setFloor(String floor) { this.floor = floor; }
+        public String getZone() { return zone; }
+        public void setZone(String zone) { this.zone = zone; }
+        public String getSeatNumber() { return seatNumber; }
+        public void setSeatNumber(String seatNumber) { this.seatNumber = seatNumber; }
+        public String getBookingDate() { return bookingDate; }
+        public void setBookingDate(String bookingDate) { this.bookingDate = bookingDate; }
+        public String getStartTime() { return startTime; }
+        public void setStartTime(String startTime) { this.startTime = startTime; }
     }
 }

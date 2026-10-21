@@ -1,521 +1,482 @@
 package com.ununn.aidome.service.serviceImpl;
 
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
-import com.ununn.aidome.ai.tool.AcademicInfoTool;
-import com.ununn.aidome.ai.tool.TimetableTool;
-import com.ununn.aidome.ai.tool.ClassroomTool;
-import com.ununn.aidome.ai.tool.LibSeatTool;
+import com.ununn.aidome.ai.reasoning.BookingExecutor;
+import com.ununn.aidome.ai.reasoning.ExecutionResult;
+import com.ununn.aidome.ai.reasoning.PlanResult;
+import com.ununn.aidome.ai.reasoning.ReasoningEngine;
+import com.ununn.aidome.ai.reasoning.SlotFillingService;
+import com.ununn.aidome.ai.reasoning.SlotOp;
+import com.ununn.aidome.Util.UserContext;
 import com.ununn.aidome.context.ChatContext;
 import com.ununn.aidome.enums.IntentType;
 import com.ununn.aidome.exception.AIServiceException;
 import com.ununn.aidome.exception.ValidationException;
-import com.ununn.aidome.pojo.ChatMessage;
 import com.ununn.aidome.pojo.Result;
 import com.ununn.aidome.service.IntentRecognitionService;
-import com.ununn.aidome.service.ParameterProcessingService;
+import com.ununn.aidome.service.MessagePersistenceService;
 import com.ununn.aidome.service.UnifiedChatService;
-import com.ununn.aidome.strategy.ChatStrategy;
-import com.ununn.aidome.strategy.impl.AcademicInfoStrategy;
-import com.ununn.aidome.strategy.impl.CourseQueryStrategy;
-import com.ununn.aidome.strategy.impl.GeneralChatStrategy;
-import com.ununn.aidome.strategy.impl.ImageRecognitionStrategy;
-import com.ununn.aidome.strategy.impl.ClassroomQueryStrategy;
-import com.ununn.aidome.strategy.impl.LibrarySeatStrategy;
-import com.ununn.aidome.Util.SessionManagerUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 /**
  * 统一聊天服务实现
+ * 基于 ReAct + Plan-and-Solve 混合架构
  */
 @Slf4j
 @Service
 public class UnifiedChatServiceImpl implements UnifiedChatService {
-    
-    @Autowired
-    private ChatClient chatClientWithMemory;
-    
-    @Autowired
-    private SessionManagerUtil sessionManagerUtil;
-    
-    @Autowired
-    private CourseQueryStrategy courseQueryStrategy;
-    
-    @Autowired
-    private GeneralChatStrategy generalChatStrategy;
-    
-    @Autowired
-    private ImageRecognitionStrategy imageRecognitionStrategy;
-    
-    @Autowired
-    private AcademicInfoStrategy academicInfoStrategy;
-    
-    @Autowired
-    private ClassroomQueryStrategy classroomQueryStrategy;
-    
-    @Autowired
-    private LibrarySeatStrategy librarySeatStrategy;
-    
-    @Autowired
-    private TimetableTool timetableTool;
-    
-    @Autowired
-    private AcademicInfoTool academicInfoTool;
-    
-    @Autowired
-    private ClassroomTool classroomTool;
-    
-    @Autowired
-    private LibSeatTool libSeatTool;
-    
-    @Autowired
-    private IntentRecognitionService intentRecognitionService;
-    
-    @Autowired
-    private ParameterProcessingService parameterProcessingService;
-    
+
+    @Autowired private ChatClient chatClientWithMemory;
+    @Autowired private IntentRecognitionService intentRecognitionService;
+    @Autowired private ReasoningEngine reasoningEngine;
+    @Autowired private SlotFillingService slotFillingService;
+    @Autowired private BookingExecutor bookingExecutor;
+    @Autowired private MessagePersistenceService messagePersistence;
+
     @Override
     public Result chatWithIntent(Integer userId, String sessionId, String message, Boolean webSearchEnabled) {
-        // 1. 参数校验
-        if (userId == null || userId <= 0) {
-            throw new ValidationException("用户ID不能为空");
-        }
-        if (sessionId == null || sessionId.trim().isEmpty()) {
-            throw new ValidationException("会话ID不能为空");
-        }
-        if (message == null || message.trim().isEmpty()) {
-            throw new ValidationException("消息内容不能为空");
-        }
-        
+        validateInput(userId, sessionId, message);
+
+        // 供工具层读取（取消预约时按用户原话对齐序号）
+        UserContext.setUserMessage(message);
+        UserContext.setSessionId(sessionId);
+
         try {
-            // 2. 识别意图
-            IntentRecognitionService.IntentRecognitionResult recognitionResult = classifyIntent(message, sessionId);
-            IntentType intent = recognitionResult.getIntentType();
-            double confidence = recognitionResult.getConfidence();
-            String extractedParams = recognitionResult.getExtractedParams();
-            log.info("识别到意图：{}, 置信度：{}, 提取参数：{}, 用户消息：{}", intent, confidence, extractedParams, message);
-            
-            // 3. 创建聊天上下文
-            ChatContext context = new ChatContext();
-            context.setUserId(userId);
-            context.setSessionId(sessionId);
-            context.setUserMessage(message);
-            context.setIntentType(intent);
-            context.setIntentConfidence(confidence);
-            context.setWebSearchEnabled(webSearchEnabled);
-            
-            // 保存提取的参数到 context，供参数处理服务使用
-            if (!extractedParams.isEmpty()) {
-                context.putExtension("extractedParams", extractedParams);
+            ChatContext context = buildContext(userId, sessionId, message, webSearchEnabled);
+            PlanResult plan = intentRecognitionService.recognizeIntent(context);
+            enrichContext(context, plan);
+
+            // Plan 阶段没拿到可信的结构化结果：直接请用户重述，不带着猜测的意图继续走
+            if (plan.isParseFailed()) {
+                log.warn("Plan阶段失败，转为请用户重述 - 会话: {}, 用户消息: {}", sessionId, message);
+                return replyParseFailed(userId, sessionId, message);
             }
-            
-            // 4. 调用统一处理
-            return chat(context);
-            
+
+            log.info("Plan结果 - 意图: {}, 子意图: {}, 置信度: {}, 参数: {}, 操作: {}, 缺失: {}, 用户消息: {}",
+                    plan.getIntentType(), plan.getSubIntent(), plan.getConfidence(),
+                    plan.getExtractedParams(), plan.getOps(), plan.getMissingParams(), message);
+
+            // 守门：模型没给出槽位操作、但用户明显在修正/取消时，二次抽取或直接澄清
+            String clarification = guardCorrection(plan, message, sessionId);
+            if (clarification != null) {
+                messagePersistence.saveMessages(userId, sessionId, message, clarification);
+                return Result.success(Map.of(
+                        "sessionId", sessionId,
+                        "message", clarification,
+                        "intentType", plan.getIntentType().name(),
+                        "requiresFollowUp", true
+                ));
+            }
+
+            // 查看预约、取消预约、查询座位不需要槽位填充，直接进入ReAct执行
+            boolean skipSlotFilling = "VIEW_BOOKINGS".equals(plan.getSubIntent())
+                    || "CANCEL_BOOKING".equals(plan.getSubIntent())
+                    || "QUERY_SEAT".equals(plan.getSubIntent());
+
+            // 参数槽位填充：按“操作”应用，而不是把抽到的值无脑覆盖
+            SlotFillingService.SlotFillingResult fillResult = null;
+            if (!skipSlotFilling) {
+                fillResult = slotFillingService.applyOps(plan.getIntentType(), plan.getOps(), sessionId);
+            }
+
+            if (!skipSlotFilling && fillResult != null && fillResult.hasMissingRequiredParams()) {
+                messagePersistence.saveSingleMessage(userId, sessionId, "user", message);
+                messagePersistence.saveSingleMessage(userId, sessionId, "assistant", fillResult.getFollowUpQuestion());
+
+                return Result.success(Map.of(
+                        "sessionId", sessionId,
+                        "message", fillResult.getFollowUpQuestion(),
+                        "intentType", plan.getIntentType().name(),
+                        "requiresFollowUp", true
+                ));
+            }
+
+            // 写操作由程序确定性执行：参数齐全的预约不再交给 ReAct 决定是否下单
+            if (isDeterministicBooking(plan, fillResult)) {
+                ExecutionResult booked = bookingExecutor.book(userId, fillResult.getFilledParams());
+                if (booked.isSuccess()) {
+                    slotFillingService.clearParams(sessionId, plan.getIntentType());
+                } else {
+                    log.warn("程序执行预约失败，保留槽位 - 会话: {}, 原因: {}", sessionId, booked.getFailReason());
+                }
+                messagePersistence.saveMessages(userId, sessionId, message, booked.getAnswer());
+                return Result.success(Map.of(
+                        "sessionId", sessionId,
+                        "message", booked.getAnswer(),
+                        "intentType", plan.getIntentType().name()
+                ));
+            }
+
+            // ReAct执行
+            ExecutionResult execResult = reasoningEngine.execute(context, plan);
+            String aiResponse = execResult.getAnswer();
+
+            // 只有执行成功才清理槽位参数；失败时保留，用户下一轮可直接重试
+            if (execResult.isSuccess()) {
+                slotFillingService.clearParams(sessionId, plan.getIntentType());
+            } else {
+                log.warn("执行未成功，保留槽位参数供重试 - 会话: {}, 原因: {}", sessionId, execResult.getFailReason());
+            }
+
+            messagePersistence.saveMessages(userId, sessionId, message, aiResponse);
+
+            return Result.success(Map.of(
+                    "sessionId", sessionId,
+                    "message", aiResponse,
+                    "intentType", plan.getIntentType().name()
+            ));
+
         } catch (ValidationException e) {
-            // 参数校验异常直接抛出，由全局异常处理器处理
             throw e;
         } catch (Exception e) {
             log.error("智能聊天失败 - 用户ID: {}, 会话ID: {}", userId, sessionId, e);
             throw new AIServiceException("聊天处理失败", e);
         }
     }
-    
+
     @Override
     public SseEmitter chatWithIntentStream(Integer userId, String sessionId, String message, Boolean webSearchEnabled) {
-        SseEmitter emitter = new SseEmitter(0L); // 长连接
-        
-        // 异步处理流式响应
+        SseEmitter emitter = new SseEmitter(0L);
+
         CompletableFuture.runAsync(() -> {
             try {
-                // 1. 识别意图
-                IntentRecognitionService.IntentRecognitionResult recognitionResult = classifyIntent(message, sessionId);
-                IntentType intent = recognitionResult.getIntentType();
-                double confidence = recognitionResult.getConfidence();
-                String extractedParams = recognitionResult.getExtractedParams();
-                log.info("流式识别到意图：{}, 置信度：{}, 提取参数：{}, 用户消息：{}", intent, confidence, extractedParams, message);
-                
-                // 2. 创建聊天上下文
-                ChatContext context = new ChatContext();
-                context.setUserId(userId);
-                context.setSessionId(sessionId);
-                context.setUserMessage(message);
-                context.setIntentType(intent);
-                context.setIntentConfidence(confidence);
-                context.setWebSearchEnabled(webSearchEnabled);
-                
-                // 3. 保存提取的参数
-                if (!extractedParams.isEmpty()) {
-                    context.putExtension("extractedParams", extractedParams);
+                UserContext.setUserMessage(message);
+                UserContext.setSessionId(sessionId);
+                ChatContext context = buildContext(userId, sessionId, message, webSearchEnabled);
+                PlanResult plan = intentRecognitionService.recognizeIntent(context);
+                enrichContext(context, plan);
+
+                // Plan 阶段没拿到可信的结构化结果：直接请用户重述，不带着猜测的意图继续走
+                if (plan.isParseFailed()) {
+                    log.warn("流式 Plan阶段失败，转为请用户重述 - 会话: {}, 用户消息: {}", sessionId, message);
+                    sendAndComplete(emitter, PARSE_FAILED_REPLY);
+                    messagePersistence.saveMessages(userId, sessionId, message, PARSE_FAILED_REPLY);
+                    return;
                 }
-                
-                // 3. 选择策略
-                ChatStrategy strategy = selectStrategy(intent);
-                
-                // 4. 处理参数
-                ParameterProcessingService.ParameterProcessingResult paramResult = parameterProcessingService.processParameters(context);
-                if (paramResult.isRequiresFollowUp()) {
-                    // 需要追问用户
-                    try {
-                        emitter.send(paramResult.getFollowUpQuestion(), MediaType.TEXT_EVENT_STREAM);
-                        
-                        // 保存消息
-                        ChatMessage userMsg = new ChatMessage();
-                        userMsg.setSessionId(context.getSessionId());
-                        userMsg.setUserId(context.getUserId());
-                        userMsg.setRole("user");
-                        userMsg.setContent(context.getUserMessage());
-                        userMsg.setCreateTime(LocalDateTime.now());
-                        sessionManagerUtil.saveMessage(userMsg);
-                        
-                        ChatMessage aiMsg = new ChatMessage();
-                        aiMsg.setSessionId(context.getSessionId());
-                        aiMsg.setUserId(context.getUserId());
-                        aiMsg.setRole("assistant");
-                        aiMsg.setContent(paramResult.getFollowUpQuestion());
-                        aiMsg.setCreateTime(LocalDateTime.now());
-                        sessionManagerUtil.saveMessage(aiMsg);
-                        
-                        emitter.complete();
-                        return;
-                    } catch (IOException e) {
-                        log.error("发送追问失败", e);
-                        emitter.completeWithError(e);
-                        return;
+
+                log.info("流式Plan结果 - 意图: {}, 置信度: {}, 用户消息: {}",
+                        plan.getIntentType(), plan.getConfidence(), message);
+
+                String clarification = guardCorrection(plan, message, sessionId);
+                if (clarification != null) {
+                    sendAndComplete(emitter, clarification);
+                    messagePersistence.saveMessages(userId, sessionId, message, clarification);
+                    return;
+                }
+
+                boolean skipSlotFilling = "VIEW_BOOKINGS".equals(plan.getSubIntent())
+                        || "CANCEL_BOOKING".equals(plan.getSubIntent())
+                        || "QUERY_SEAT".equals(plan.getSubIntent());
+
+                SlotFillingService.SlotFillingResult fillResult = null;
+                if (!skipSlotFilling) {
+                    fillResult = slotFillingService.applyOps(plan.getIntentType(), plan.getOps(), sessionId);
+                }
+
+                if (!skipSlotFilling && fillResult != null && fillResult.hasMissingRequiredParams()) {
+                    sendAndComplete(emitter, fillResult.getFollowUpQuestion());
+                    messagePersistence.saveMessages(userId, sessionId, message, fillResult.getFollowUpQuestion());
+                    return;
+                }
+
+                if (isDeterministicBooking(plan, fillResult)) {
+                    ExecutionResult booked = bookingExecutor.book(userId, fillResult.getFilledParams());
+                    if (booked.isSuccess()) {
+                        slotFillingService.clearParams(sessionId, plan.getIntentType());
+                    } else {
+                        log.warn("程序执行预约失败，保留槽位 - 会话: {}, 原因: {}", sessionId, booked.getFailReason());
                     }
+                    sendInChunks(emitter, booked.getAnswer());
+                    messagePersistence.saveMessages(userId, sessionId, message, booked.getAnswer());
+                    emitter.complete();
+                    return;
                 }
-                
-                // 5. 构建消息列表
-                List<Message> messages = buildMessages(context, strategy);
-                
-                // 6. 配置工具
-                var promptBuilder = chatClientWithMemory.prompt().messages(messages);
-                List<String> toolNames = strategy.getRequiredTools();
-                if (!toolNames.isEmpty()) {
-                    // 将工具名称转换为 ToolCallback 数组
-                    ToolCallback[] toolCallbacks = resolveToolCallbacks(toolNames);
-                    if (toolCallbacks.length > 0) {
-                        promptBuilder.toolCallbacks(toolCallbacks);
-                        log.info("注册工具：{}", toolNames);
-                    }
+
+                ExecutionResult execResult;
+                if (plan.getIntentType() == IntentType.GENERAL_CHAT) {
+                    execResult = ExecutionResult.ok(executeDirectStream(context, emitter));
+                } else {
+                    execResult = executeStreamWithBuffer(context, plan, emitter);
                 }
-                
-                // 7. 配置模型参数
-                DashScopeChatOptions options = DashScopeChatOptions.builder()
-                        .withModel("qwen-max")
-                        .withTemperature(0.7)
-                        .build();
-                
-                if (Boolean.TRUE.equals(webSearchEnabled)) {
-                    options.setEnableSearch(true);
+
+                // 只有执行成功才清理槽位参数；失败时保留，用户下一轮可直接重试
+                if (execResult.isSuccess()) {
+                    slotFillingService.clearParams(sessionId, plan.getIntentType());
+                } else {
+                    log.warn("流式执行未成功，保留槽位参数 - 会话: {}, 原因: {}", sessionId, execResult.getFailReason());
                 }
-                
-                // 7. 流式调用 AI
-                final StringBuilder fullResponse = new StringBuilder();
-                
-                promptBuilder.options(options).stream().content().subscribe(
-                    content -> {
-                        // 逐字接收并推送给前端
-                        try {
-                            emitter.send(content, MediaType.TEXT_EVENT_STREAM);
-                            fullResponse.append(content);
-                        } catch (IOException e) {
-                            log.error("发送流式数据失败", e);
-                        }
-                    },
-                    throwable -> {
-                        // 错误回调
-                        log.error("流式调用失败", throwable);
-                        emitter.completeWithError(throwable);
-                    },
-                    () -> {
-                        // 完成回调 - 保存消息
-                        try {
-                            ChatMessage userMsg = new ChatMessage();
-                            userMsg.setSessionId(context.getSessionId());
-                            userMsg.setUserId(context.getUserId());
-                            userMsg.setRole("user");
-                            userMsg.setContent(context.getUserMessage());
-                            userMsg.setCreateTime(LocalDateTime.now());
-                            sessionManagerUtil.saveMessage(userMsg);
-                            
-                            ChatMessage aiMsg = new ChatMessage();
-                            aiMsg.setSessionId(context.getSessionId());
-                            aiMsg.setUserId(context.getUserId());
-                            aiMsg.setRole("assistant");
-                            aiMsg.setContent(fullResponse.toString());
-                            aiMsg.setCreateTime(LocalDateTime.now());
-                            sessionManagerUtil.saveMessage(aiMsg);
-                            
-                            emitter.complete();
-                            log.info("流式响应完成，会话 ID: {}", sessionId);
-                        } catch (Exception e) {
-                            log.error("完成流式响应失败", e);
-                            emitter.completeWithError(e);
-                        }
-                    }
-                );
+
+                messagePersistence.saveMessages(userId, sessionId, message, execResult.getAnswer());
+                emitter.complete();
 
             } catch (Exception e) {
                 log.error("流式聊天失败", e);
                 emitter.completeWithError(e);
+            } finally {
+                // 异步线程上的 ThreadLocal 必须清理，避免线程复用串号
+                UserContext.clear();
             }
         });
-        
+
         return emitter;
     }
-    
+
     @Override
     public Result chat(ChatContext context) {
-        // 1. 参数校验
-        if (context == null) {
-            throw new ValidationException("聊天上下文不能为空");
-        }
-        if (context.getIntentType() == null) {
-            throw new ValidationException("意图类型不能为空");
-        }
-        
+        if (context == null) throw new ValidationException("聊天上下文不能为空");
+        if (context.getIntentType() == null) throw new ValidationException("意图类型不能为空");
+
+        UserContext.setUserMessage(context.getUserMessage());
+        UserContext.setSessionId(context.getSessionId());
+
         try {
-            // 2. 根据意图选择策略
-            ChatStrategy strategy = selectStrategy(context.getIntentType());
-            log.info("选择策略：{}, 处理用户消息：{}", strategy.getClass().getSimpleName(), context.getUserMessage());
-            
-            // 3. 处理参数
-            ParameterProcessingService.ParameterProcessingResult paramResult = parameterProcessingService.processParameters(context);
-            if (paramResult.isRequiresFollowUp()) {
-                // 需要追问用户
-                log.info("需要追问用户: {}", paramResult.getFollowUpQuestion());
-                
-                // 保存用户消息
-                saveMessages(context, paramResult.getFollowUpQuestion());
-                
-                // 返回追问内容
-                Map<String, Object> response = Map.of(
+            PlanResult plan = context.getPlanResult();
+            if (plan == null) {
+                plan = new PlanResult();
+                plan.setIntentType(context.getIntentType());
+                plan.setConfidence(context.getIntentConfidence() != null ? context.getIntentConfidence() : 0.5);
+                plan.setPlan("直接执行");
+            }
+
+            ExecutionResult execResult = reasoningEngine.execute(context, plan);
+            String aiResponse = execResult.getAnswer();
+
+            // 只有执行成功才清理槽位参数
+            if (execResult.isSuccess()) {
+                slotFillingService.clearParams(context.getSessionId(), plan.getIntentType());
+            } else {
+                log.warn("执行未成功，保留槽位参数 - 会话: {}, 原因: {}",
+                        context.getSessionId(), execResult.getFailReason());
+            }
+
+            messagePersistence.saveMessages(context.getUserId(), context.getSessionId(), context.getUserMessage(), aiResponse);
+
+            return Result.success(Map.of(
                     "sessionId", context.getSessionId(),
-                    "message", paramResult.getFollowUpQuestion(),
-                    "intentType", context.getIntentType().name(),
-                    "requiresFollowUp", true
-                );
-                return Result.success(response);
-            }
-            
-            // 4. 构建消息列表
-            List<Message> messages = buildMessages(context, strategy);
-            
-            // 5. 配置工具（只注册当前策略需要的工具）
-            var promptBuilder = chatClientWithMemory.prompt().messages(messages);
-            List<String> toolNames = strategy.getRequiredTools();
-            if (!toolNames.isEmpty()) {
-                // 将工具名称转换为 ToolCallback 数组
-                ToolCallback[] toolCallbacks = resolveToolCallbacks(toolNames);
-                if (toolCallbacks.length > 0) {
-                    promptBuilder.toolCallbacks(toolCallbacks);
-                    log.info("注册工具: {}", toolNames);
-                }
-            }
-            
-            // 6. 配置模型参数
-            DashScopeChatOptions options = DashScopeChatOptions.builder()
-                    .withModel("qwen-max")
-                    .withTemperature(0.7)
-                    .build();
-            
-            if (Boolean.TRUE.equals(context.getWebSearchEnabled())) {
-                options.setEnableSearch(true);
-                log.info("启用联网搜索");
-            }
-            
-            // 7. 调用 AI
-            log.info("调用AI模型处理消息");
-            String aiResponse = promptBuilder.options(options).call().content();
-            log.info("AI响应: {}", aiResponse);
-            
-            // 8. 后处理响应
-            String processedResponse = strategy.postProcessResponse(context, aiResponse);
-            
-            // 9. 保存消息到 Redis
-            if (strategy.shouldSaveMessage()) {
-                saveMessages(context, processedResponse);
-            }
-            
-            // 10. 返回结果
-            Map<String, Object> response = Map.of(
-                "sessionId", context.getSessionId(),
-                "message", processedResponse,
-                "intentType", context.getIntentType().name()
-            );
-            return Result.success(response);
-                
+                    "message", aiResponse,
+                    "intentType", plan.getIntentType().name()
+            ));
+
         } catch (ValidationException e) {
-            // 参数校验异常直接抛出
             throw e;
         } catch (Exception e) {
-            log.error("统一聊天服务失败 - 用户ID: {}, 会话ID: {}", 
+            log.error("统一聊天服务失败 - 用户ID: {}, 会话ID: {}",
                     context.getUserId(), context.getSessionId(), e);
             throw new AIServiceException("聊天服务异常", e);
         }
     }
-    
+
+    // ==================== 守门与澄清 ====================
+
     /**
-     * 使用AI进行意图分类
-     * @param message 用户消息
-     * @param sessionId 会话ID（用于从Redis获取历史上下文）
-     * @return 意图类型
+     * Plan 阶段失败时的统一答复。
+     *
+     * <p>结构化输出失败意味着这一轮没有可信的意图与槽位变更，此时宁可让用户重述一句，
+     * 也不能沿用上一轮的槽位或猜一个意图去执行预约、取消这类写操作。</p>
      */
-    private IntentRecognitionService.IntentRecognitionResult classifyIntent(String message, String sessionId) {
-        if (message == null || message.trim().isEmpty()) {
-            return new IntentRecognitionService.IntentRecognitionResult(IntentType.GENERAL_CHAT, 1.0, "");
+    private static final String PARSE_FAILED_REPLY =
+            "抱歉，我刚才没理解清楚。请把要查询或办理的事情再说一遍，例如「明天下午2楼A区还有空闲座位吗」。";
+
+    private Result replyParseFailed(Integer userId, String sessionId, String message) {
+        messagePersistence.saveMessages(userId, sessionId, message, PARSE_FAILED_REPLY);
+        return Result.success(Map.of(
+                "sessionId", sessionId,
+                "message", PARSE_FAILED_REPLY,
+                "intentType", IntentType.GENERAL_CHAT.name(),
+                "requiresFollowUp", true
+        ));
+    }
+
+    /** 用户明显在推翻/取消某条已填信息时的措辞 */
+    private static final Pattern CORRECTION_CUE = Pattern.compile(
+            "不是|不对|我说的是|改成|换成|改一下|重新|重来|算了|不要|不用|取消|清空|换一个");
+
+    /** 用户放弃本次填写 */
+    private static final Pattern ABANDON_CUE = Pattern.compile(
+            "算了|不预约了|不查了|不用了|先不|清空|不填了");
+
+    /**
+     * 守门：当模型没有给出任何槽位操作、但用户明显在修正或取消时，
+     * 先尝试“二次抽取”，仍抽不出来就改为澄清追问，避免沿用旧参数继续执行。
+     *
+     * @return 需要直接回复用户的澄清文本；返回 null 表示继续正常流程
+     */
+    private String guardCorrection(PlanResult plan, String message, String sessionId) {
+        if (plan == null || plan.getIntentType() == null) {
+            return null;
         }
-        
-        // 创建临时上下文用于意图识别
-        ChatContext tempContext = new ChatContext();
-        tempContext.setUserMessage(message);
-        tempContext.setSessionId(sessionId);  // 设置 sessionId，以便从 Redis 获取历史消息
-        
-        // 调用AI意图识别服务
-        return intentRecognitionService.recognizeIntent(tempContext);
-    }
-    
-    /**
-     * 根据意图类型选择对应的策略
-     * @param intentType 意图类型
-     * @return 对应的策略
-     */
-    private ChatStrategy selectStrategy(IntentType intentType) {
-        return switch (intentType) {
-            case COURSE_QUERY -> courseQueryStrategy;
-            case ACADEMIC_INFO -> academicInfoStrategy;
-            case IMAGE_RECOGNITION -> imageRecognitionStrategy;
-            case CLASSROOM_QUERY -> classroomQueryStrategy;
-            case LIBRARY_SEAT -> librarySeatStrategy;
-            case GENERAL_CHAT -> generalChatStrategy;
-            default -> generalChatStrategy;
-        };
-    }
-    
-    /**
-     * 构建消息列表
-     * @param context 聊天上下文
-     * @param strategy 聊天策略
-     * @return 消息列表
-     */
-    private List<Message> buildMessages(ChatContext context, ChatStrategy strategy) {
-        List<Message> messages = new ArrayList<>();
-        
-        // 1. 添加系统提示词（动态生成）
-        String systemPrompt = strategy.buildSystemPrompt(context);
-        messages.add(new UserMessage(systemPrompt));
-        log.info("系统提示词长度: {} 字符", systemPrompt.length());
-        
-        // 2. 添加历史消息
-        try {
-            List<ChatMessage> history = sessionManagerUtil.getFullMessages(context.getSessionId());
-            for (ChatMessage msg : history) {
-                if ("user".equals(msg.getRole())) {
-                    messages.add(new UserMessage(msg.getContent()));
-                } else if ("assistant".equals(msg.getRole())) {
-                    messages.add(new AssistantMessage(msg.getContent()));
-                }
+        IntentType intentType = plan.getIntentType();
+        if (intentType == IntentType.GENERAL_CHAT || intentType == IntentType.IMAGE_RECOGNITION) {
+            return null;
+        }
+        // 查看/取消预约是子意图级别的动作，不涉及槽位修正
+        if ("VIEW_BOOKINGS".equals(plan.getSubIntent()) || "CANCEL_BOOKING".equals(plan.getSubIntent())) {
+            return null;
+        }
+        // 模型已经给出操作，说明它把这句话理解成了一次变更，不需要守门
+        if (plan.getOps() != null && !plan.getOps().isEmpty()) {
+            return null;
+        }
+        // 没有历史槽位就无所谓“修正”
+        Map<String, String> currentParams = slotFillingService.getAccumulatedParams(sessionId, intentType);
+        if (currentParams.isEmpty()) {
+            return null;
+        }
+        if (!CORRECTION_CUE.matcher(message).find()) {
+            return null;
+        }
+
+        List<SlotOp> ops = reasoningEngine.reExtractOps(message, intentType, currentParams);
+        if (ops != null && !ops.isEmpty()) {
+            boolean allClear = ops.stream().allMatch(op -> op.getOp() == SlotOp.Op.CLEAR);
+            if (allClear && ABANDON_CUE.matcher(message).find()) {
+                slotFillingService.clearParams(sessionId, intentType);
+                log.info("用户放弃填写，已清空槽位 - 会话: {}, 意图: {}", sessionId, intentType);
+                return "好的，已清空本次填写的信息。需要时再告诉我。";
             }
-            log.info("添加历史消息数: {}", history.size());
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            log.error("获取历史消息失败", e);
-            // 历史消息获取失败不影响主流程，继续处理当前消息
+            plan.setOps(ops);
+            log.info("守门补抽成功 - 用户: {}, 操作: {}", message, ops);
+            return null;
         }
-        
-        // 3. 添加当前用户消息
-        messages.add(new UserMessage(context.getUserMessage()));
-        
-        return messages;
+
+        log.info("守门未能抽出操作，转为澄清 - 用户: {}, 当前槽位: {}", message, currentParams);
+        return "你是想修改还是取消刚才填写的信息？当前已记录："
+                + slotFillingService.describeSlots(intentType, currentParams)
+                + "。请告诉我具体要改哪一项，例如“改成2楼”。";
     }
-    
-    /**
-     * 保存消息到 Redis
-     * @param context 聊天上下文
-     * @param aiResponse AI 响应
-     */
-    private void saveMessages(ChatContext context, String aiResponse) {
+
+    /** 参数齐全的图书馆预约由程序执行，避免模型只回复不下单、或把参数抄错 */
+    private boolean isDeterministicBooking(PlanResult plan, SlotFillingService.SlotFillingResult fillResult) {
+        return plan.getIntentType() == IntentType.LIBRARY_SEAT
+                && "BOOK_SEAT".equals(plan.getSubIntent())
+                && fillResult != null
+                && fillResult.isComplete();
+    }
+
+    /** 分块推送文本，避免单次事件过大 */
+    private void sendInChunks(SseEmitter emitter, String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        int chunkSize = 50;
+        for (int i = 0; i < text.length(); i += chunkSize) {
+            int end = Math.min(i + chunkSize, text.length());
+            try {
+                emitter.send(text.substring(i, end), MediaType.TEXT_EVENT_STREAM);
+            } catch (IOException e) {
+                log.error("发送流式数据失败", e);
+                break;
+            }
+        }
+    }
+
+    private void validateInput(Integer userId, String sessionId, String message) {
+        if (userId == null || userId <= 0) throw new ValidationException("用户ID不能为空");
+        if (sessionId == null || sessionId.trim().isEmpty()) throw new ValidationException("会话ID不能为空");
+        if (message == null || message.trim().isEmpty()) throw new ValidationException("消息内容不能为空");
+    }
+
+    private ChatContext buildContext(Integer userId, String sessionId, String message, Boolean webSearchEnabled) {
+        ChatContext context = new ChatContext();
+        context.setUserId(userId);
+        context.setSessionId(sessionId);
+        context.setUserMessage(message);
+        context.setWebSearchEnabled(webSearchEnabled);
+        return context;
+    }
+
+    private void enrichContext(ChatContext context, PlanResult plan) {
+        context.setIntentType(plan.getIntentType());
+        context.setIntentConfidence(plan.getConfidence());
+        context.setPlanResult(plan);
+    }
+
+    private ExecutionResult executeStreamWithBuffer(ChatContext context, PlanResult plan, SseEmitter emitter) {
         try {
-            // 保存用户消息
-            ChatMessage userMsg = new ChatMessage();
-            userMsg.setSessionId(context.getSessionId());
-            userMsg.setUserId(context.getUserId());
-            userMsg.setRole("user");
-            userMsg.setContent(context.getUserMessage());
-            userMsg.setCreateTime(LocalDateTime.now());
-            sessionManagerUtil.saveMessage(userMsg);
-            
-            // 保存 AI 回复
-            ChatMessage aiMsg = new ChatMessage();
-            aiMsg.setSessionId(context.getSessionId());
-            aiMsg.setUserId(context.getUserId());
-            aiMsg.setRole("assistant");
-            aiMsg.setContent(aiResponse);
-            aiMsg.setCreateTime(LocalDateTime.now());
-            sessionManagerUtil.saveMessage(aiMsg);
-            
-            log.info("消息已保存到 Redis，会话 ID: {}", context.getSessionId());
+            ExecutionResult result = reasoningEngine.execute(context, plan);
+            sendInChunks(emitter, result.getAnswer());
+            return result;
         } catch (Exception e) {
-            log.error("保存消息失败", e);
-            // 保存失败不影响主流程
+            log.error("ReAct执行失败", e);
+            String errorMsg = "抱歉，处理您的请求时出现了问题，请稍后再试。";
+            sendInChunks(emitter, errorMsg);
+            return ExecutionResult.fail(e.getMessage(), errorMsg);
         }
     }
-    
-    /**
-     * 根据工具名称解析 ToolCallback 数组
-     * @param toolNames 工具名称列表
-     * @return ToolCallback 数组
-     */
-    private ToolCallback[] resolveToolCallbacks(List<String> toolNames) {
-        List<ToolCallback> callbacks = new ArrayList<>();
-        
-        for (String toolName : toolNames) {
-            ToolCallback callback = switch (toolName) {
-                case "queryCoursesFunction" -> FunctionToolCallback.builder("queryCoursesFunction", timetableTool.queryCoursesFunction())
-                        .inputType(TimetableTool.QueryCoursesRequest.class)
-                        .build();
-                case "getTimetableFunction" -> FunctionToolCallback.builder("getTimetableFunction", timetableTool.getTimetableFunction())
-                        .inputType(TimetableTool.GetTimetableRequest.class)
-                        .build();
-                case "queryAcademicInfoFunction" -> FunctionToolCallback.builder("queryAcademicInfoFunction", academicInfoTool.queryAcademicInfoFunction())
-                        .inputType(AcademicInfoTool.QueryAcademicInfoRequest.class)
-                        .build();
-                case "queryClassroomFunction" -> FunctionToolCallback.builder("queryClassroomFunction", classroomTool.queryClassroomFunction())
-                        .inputType(ClassroomTool.QueryClassroomRequest.class)
-                        .build();
-                case "querySeatFunction" -> FunctionToolCallback.builder("querySeatFunction", libSeatTool.querySeatFunction())
-                        .inputType(LibSeatTool.QuerySeatRequest.class)
-                        .build();
-                case "bookSeatFunction" -> FunctionToolCallback.builder("bookSeatFunction", libSeatTool.bookSeatFunction())
-                        .inputType(LibSeatTool.BookSeatRequest.class)
-                        .build();
-                default -> {
-                    log.warn("未知工具名称: {}", toolName);
-                    yield null;
-                }
-            };
-            
-            if (callback != null) {
-                callbacks.add(callback);
-            }
+
+    private String executeDirectStream(ChatContext context, SseEmitter emitter) {
+        var promptBuilder = chatClientWithMemory.prompt().user(context.getUserMessage());
+
+        DashScopeChatOptions options = DashScopeChatOptions.builder()
+                .withModel("qwen-max")
+                .withTemperature(0.7)
+                .build();
+
+        if (Boolean.TRUE.equals(context.getWebSearchEnabled())) {
+            options.setEnableSearch(true);
         }
-        
-        return callbacks.toArray(new ToolCallback[0]);
+
+        StringBuilder fullResponse = new StringBuilder();
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<Throwable> errorRef = new AtomicReference<>();
+
+        promptBuilder.options(options).stream().content().subscribe(
+                content -> {
+                    try {
+                        emitter.send(content, MediaType.TEXT_EVENT_STREAM);
+                        fullResponse.append(content);
+                    } catch (IOException e) {
+                        log.error("发送流式数据失败", e);
+                    }
+                },
+                throwable -> {
+                    log.error("流式调用失败", throwable);
+                    errorRef.set(throwable);
+                    latch.countDown();
+                },
+                () -> latch.countDown()
+        );
+
+        try {
+            // 最多等待5分钟，与SseEmitter超时一致
+            boolean completed = latch.await(5, TimeUnit.MINUTES);
+            if (!completed) {
+                log.warn("流式调用等待超时");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.error("等待流式响应被中断", e);
+        }
+
+        // 如果有异常，抛出
+        if (errorRef.get() != null) {
+            throw new RuntimeException("流式调用失败", errorRef.get());
+        }
+
+        return fullResponse.toString();
+    }
+
+    private void sendAndComplete(SseEmitter emitter, String message) {
+        try {
+            emitter.send(message, MediaType.TEXT_EVENT_STREAM);
+            emitter.complete();
+        } catch (IOException e) {
+            log.error("发送追问失败", e);
+            emitter.completeWithError(e);
+        }
     }
 }
