@@ -60,6 +60,9 @@ public class ChatCommonServiceImpl implements ChatCommonService {
         if (sessionId == null || sessionId.isEmpty()) {
             sessionId = UUID.randomUUID().toString().replace("-", "");
             stringRedisTemplate.opsForValue().set(currentSessionKey, sessionId);
+            // 必须立刻登记到用户会话集合：getAllSessions 与 SessionSaverUtil 都只认这个集合，
+            // 漏掉这一步的话，一旦用户切换会话，这个会话就会变成谁都找不到、也不会落库的孤儿。
+            addSessionToUserList(userId, sessionId);
             log.info("为用户{}创建新会话，会话ID：{}", userId, sessionId);
         } else {
             log.debug("用户{}的当前会话ID：{}", userId, sessionId);
@@ -275,6 +278,11 @@ public class ChatCommonServiceImpl implements ChatCommonService {
     @Transactional
     public Result useSession(Integer userId, String sessionId) {
         try {
+            // 0. 切换之前，先把“当前会话”补登记进用户会话集合。
+            //    老版本 getOrCreateSessionId 创建新会话时没有登记，直接切走会让它变成孤儿会话：
+            //    既不在历史列表里，也不会被定时任务落库。这一步同时能救活存量的孤儿会话。
+            registerCurrentSessionBeforeSwitch(userId, sessionId);
+
             List<ChatMessage> sessionMessages;
 
             // 1. 优先从Redis获取
@@ -292,6 +300,13 @@ public class ChatCommonServiceImpl implements ChatCommonService {
 
                     addSessionToUserList(userId, sessionId);
                     refreshSessionTTL(sessionId, userId);
+
+                    // 与数据库分支保持一致：切到哪个会话，“当前会话”指针就指向它。
+                    // 否则刷新页面后 getOrCreateSessionId 会拿回切换前的旧会话。
+                    stringRedisTemplate.opsForValue().set(
+                            RedisConstants.CHAT_USER_CURRENT_SESSION_KEY + userId, sessionId);
+                    stringRedisTemplate.expire(RedisConstants.CHAT_USER_SESSIONS_KEY + userId,
+                            RedisConstants.CHAT_SESSION_TTL, TimeUnit.HOURS);
 
                     int recentCount = offsetManager.getRecentMessageCount(sessionId, sessionMessages);
                     log.info("用户{}使用会话{}，共{}条消息，Redis中保存了最新的{}条",
@@ -482,6 +497,34 @@ public class ChatCommonServiceImpl implements ChatCommonService {
             }
         }
         return "未命名会话";
+    }
+
+    /**
+     * 切换会话之前，把“当前会话”补登记到用户会话集合。
+     *
+     * <p>历史实现里 {@code getOrCreateSessionId} 创建新会话时只写了当前会话指针，没有把会话
+     * 登记进 {@code chat:user:sessions:{userId}}。用户一旦点“使用历史对话”切走，那个正在聊的
+     * 会话就会变成孤儿：{@code getAllSessions} 查不到它（只认数据库 + 该集合），
+     * {@code SessionSaverUtil} 也不会把它落库，12 小时 TTL 一过消息就彻底没了。</p>
+     *
+     * <p>放在这里兜底，既能补上新会话的登记，也能把存量的孤儿会话救回来。</p>
+     */
+    private void registerCurrentSessionBeforeSwitch(Integer userId, String switchingTo) {
+        try {
+            String currentSessionKey = RedisConstants.CHAT_USER_CURRENT_SESSION_KEY + userId;
+            String currentSessionId = stringRedisTemplate.opsForValue().get(currentSessionKey);
+            if (currentSessionId == null || currentSessionId.isEmpty()
+                    || currentSessionId.equals(switchingTo)) {
+                return;
+            }
+            addSessionToUserList(userId, currentSessionId);
+            refreshSessionTTL(currentSessionId, userId);
+            stringRedisTemplate.expire(RedisConstants.CHAT_USER_SESSIONS_KEY + userId,
+                    RedisConstants.CHAT_SESSION_TTL, TimeUnit.HOURS);
+            log.info("切换会话前，已把当前会话{}登记到用户{}的会话列表", currentSessionId, userId);
+        } catch (Exception e) {
+            log.warn("切换会话前登记当前会话失败，用户{}", userId, e);
+        }
     }
 
     /**
