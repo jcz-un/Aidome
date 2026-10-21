@@ -30,6 +30,8 @@ spring:
     dashscope:
       api-key: ${DASHSCOPE_API_KEY}
       chat:
+        # qwen3.x 系列只在 multimodal 端点提供；默认的 text-generation 端点会返回 url error
+        completions-path: /api/v1/services/aigc/multimodal-generation/generation
         options:
           model: qwen3.8-max
           temperature: 0.7
