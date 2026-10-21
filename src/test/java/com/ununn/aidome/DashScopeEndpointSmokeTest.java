@@ -8,6 +8,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import java.util.List;
@@ -30,10 +31,16 @@ class DashScopeEndpointSmokeTest {
     @Autowired
     private DashScopeChatModel chatModel;
 
+    /** 与生产代码同源：模型名只从 application.yml 的 ai.model 取 */
+    @Value("${ai.model}")
+    private String model;
+
     @Test
-    void qwen3_8_max_能正常返回内容() {
+    void 配置里的模型能正常返回内容() {
+        System.out.println("=== 使用模型: " + model + " ===");
+
         DashScopeChatOptions options = DashScopeChatOptions.builder()
-                .withModel("qwen3.8-max")
+                .withModel(model)
                 .withTemperature(0.0)
                 .withEnableThinking(false)
                 .build();

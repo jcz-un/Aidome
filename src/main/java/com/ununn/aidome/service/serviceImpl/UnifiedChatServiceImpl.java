@@ -19,6 +19,7 @@ import com.ununn.aidome.service.UnifiedChatService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -39,6 +40,10 @@ import java.util.regex.Pattern;
 @Slf4j
 @Service
 public class UnifiedChatServiceImpl implements UnifiedChatService {
+
+    /** 统一模型配置：改 application.yml 的 ai.model 即可全站生效 */
+    @Value("${ai.model}")
+    private String model;
 
     @Autowired private ChatClient chatClientWithMemory;
     @Autowired private IntentRecognitionService intentRecognitionService;
@@ -478,7 +483,7 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
         var promptBuilder = chatClientWithMemory.prompt().user(context.getUserMessage());
 
         DashScopeChatOptions options = DashScopeChatOptions.builder()
-                .withModel("qwen3.8-max")
+                .withModel(model)
                 .withTemperature(0.7)
                 .build();
 

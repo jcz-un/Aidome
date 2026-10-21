@@ -26,6 +26,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -50,6 +51,10 @@ import java.util.regex.Pattern;
 public class ReasoningEngine {
 
     private static final int MAX_REACT_STEPS = 5;
+
+    /** 统一模型配置：改 application.yml 的 ai.model 即可全站生效 */
+    @Value("${ai.model}")
+    private String model;
 
     @Autowired private ChatClient chatClientWithMemory;
     @Autowired private DashScopeChatModel dashScopeChatModel;
@@ -97,7 +102,7 @@ public class ReasoningEngine {
         // enableThinking(false)：思考模式下 DashScope 不允许强制 tool_choice
         //   （qwen3.7-plus 会直接报错），关掉后既合法又更快、更省。
         DashScopeChatOptions options = DashScopeChatOptions.builder()
-                .withModel("qwen3.8-max")
+                .withModel(model)
                 .withTemperature(0.1)
                 .withEnableThinking(false)
                 .withToolCallbacks(List.of(planSubmitTool.planCallback()))
@@ -525,7 +530,7 @@ public class ReasoningEngine {
                     "\n【用户最新一句话】" + userMessage;
 
             DashScopeChatOptions options = DashScopeChatOptions.builder()
-                    .withModel("qwen3.8-max")
+                    .withModel(model)
                     .withTemperature(0.0)
                     .build();
 
@@ -576,7 +581,7 @@ public class ReasoningEngine {
         }
 
         DashScopeChatOptions options = DashScopeChatOptions.builder()
-                .withModel("qwen3.8-max")
+                .withModel(model)
                 .withTemperature(0.7)
                 .build();
 
@@ -626,7 +631,7 @@ public class ReasoningEngine {
             }
 
             DashScopeChatOptions options = DashScopeChatOptions.builder()
-                    .withModel("qwen3.8-max")
+                    .withModel(model)
                     .withTemperature(0.3)
                     .build();
 

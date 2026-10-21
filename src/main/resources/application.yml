@@ -1,3 +1,8 @@
+# ===== 全站模型统一配置 =====
+# 需要更换模型时，只改这一处即可（代码里所有 withModel 都从这里取）
+ai:
+  model: qwen3.8-max
+
 spring:
   application:
     name: Aidome
@@ -33,7 +38,7 @@ spring:
         # qwen3.x 系列只在 multimodal 端点提供；默认的 text-generation 端点会返回 url error
         completions-path: /api/v1/services/aigc/multimodal-generation/generation
         options:
-          model: qwen3.8-max
+          model: ${ai.model}
           temperature: 0.7
       embedding:
         options:
