@@ -66,6 +66,20 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
                 return replyParseFailed(userId, sessionId, message);
             }
 
+            // 置信度偏低时先澄清，别把模型猜出来的意图直接拿去执行
+            if (needsClarification(plan)) {
+                String clarify = buildClarifyReply(plan);
+                log.info("置信度偏低，先澄清 - 会话: {}, 意图: {}, 置信度: {}, 用户消息: {}",
+                        sessionId, plan.getIntentType(), plan.getConfidence(), message);
+                messagePersistence.saveMessages(userId, sessionId, message, clarify);
+                return Result.success(Map.of(
+                        "sessionId", sessionId,
+                        "message", clarify,
+                        "intentType", plan.getIntentType().name(),
+                        "requiresFollowUp", true
+                ));
+            }
+
             log.info("Plan结果 - 意图: {}, 子意图: {}, 置信度: {}, 参数: {}, 操作: {}, 缺失: {}, 用户消息: {}",
                     plan.getIntentType(), plan.getSubIntent(), plan.getConfidence(),
                     plan.getExtractedParams(), plan.getOps(), plan.getMissingParams(), message);
@@ -165,6 +179,16 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
                     log.warn("流式 Plan阶段失败，转为请用户重述 - 会话: {}, 用户消息: {}", sessionId, message);
                     sendAndComplete(emitter, PARSE_FAILED_REPLY);
                     messagePersistence.saveMessages(userId, sessionId, message, PARSE_FAILED_REPLY);
+                    return;
+                }
+
+                // 置信度偏低时先澄清，别把模型猜出来的意图直接拿去执行
+                if (needsClarification(plan)) {
+                    String clarify = buildClarifyReply(plan);
+                    log.info("流式 置信度偏低，先澄清 - 会话: {}, 意图: {}, 置信度: {}",
+                            sessionId, plan.getIntentType(), plan.getConfidence());
+                    sendAndComplete(emitter, clarify);
+                    messagePersistence.saveMessages(userId, sessionId, message, clarify);
                     return;
                 }
 
@@ -299,6 +323,38 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
                 "intentType", IntentType.GENERAL_CHAT.name(),
                 "requiresFollowUp", true
         ));
+    }
+
+    // ==================== 置信度守门 ====================
+
+    /**
+     * 置信度低于此值时先澄清，不直接执行。
+     *
+     * <p>模型给出的 confidence 长期偏高（实测多在 0.95 以上），这个阈值主要用来兜住真正含糊的
+     * 输入，避免“猜出来的意图”直接触发预约、取消这类写操作。</p>
+     */
+    private static final double LOW_CONFIDENCE_THRESHOLD = 0.6;
+
+    /**
+     * 是否应该先向用户澄清。
+     *
+     * <p>只有“业务意图 + 低置信度”才澄清；闲聊（GENERAL_CHAT）和解析失败各有自己的分支，
+     * 不走这里。</p>
+     */
+    boolean needsClarification(PlanResult plan) {
+        if (plan == null || plan.isParseFailed() || plan.getIntentType() == null) {
+            return false;
+        }
+        if (plan.getIntentType() == IntentType.GENERAL_CHAT) {
+            return false;
+        }
+        return plan.getConfidence() < LOW_CONFIDENCE_THRESHOLD;
+    }
+
+    /** 低置信度时的澄清话术：把模型猜到的意图告诉用户，请其补充 */
+    private String buildClarifyReply(PlanResult plan) {
+        return "我不太确定你是想「" + plan.getIntentType().getDescription()
+                + "」，能再具体说一下吗？比如把时间、地点一起告诉我。";
     }
 
     /** 用户明显在推翻/取消某条已填信息时的措辞 */
