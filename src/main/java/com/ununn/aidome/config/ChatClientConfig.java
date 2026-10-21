@@ -17,7 +17,7 @@ public class ChatClientConfig {
     public ChatClient chatClient(DashScopeChatModel chatModel) {
         return ChatClient.builder(chatModel)
                 .defaultOptions(DashScopeChatOptions.builder()
-                        .withModel("qwen-max")
+                        .withModel("qwen3.8-max")
                         .withTemperature(0.7)
                         .build())
                 .build();
@@ -27,7 +27,7 @@ public class ChatClientConfig {
     public ChatClient chatClientWithMemory(DashScopeChatModel chatModel) {
         return ChatClient.builder(chatModel)
                 .defaultOptions(DashScopeChatOptions.builder()
-                        .withModel("qwen-max")
+                        .withModel("qwen3.8-max")
                         .withTemperature(0.7)
                         .build())
                 .build();

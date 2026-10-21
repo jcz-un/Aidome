@@ -94,9 +94,12 @@ public class ReasoningEngine {
         // 结构化输出通道：把 PlanResult 声明成唯一可选的工具，并把 tool_choice 钉死在它上面。
         // 模型只能通过工具参数返回结果，绕开了“自由文本里夹 JSON”这条脆弱路径。
         // internalToolExecutionEnabled=false：只取参数，不让框架真的去执行这个工具。
+        // enableThinking(false)：思考模式下 DashScope 不允许强制 tool_choice
+        //   （qwen3.7-plus 会直接报错），关掉后既合法又更快、更省。
         DashScopeChatOptions options = DashScopeChatOptions.builder()
-                .withModel("qwen-max")
+                .withModel("qwen3.8-max")
                 .withTemperature(0.1)
+                .withEnableThinking(false)
                 .withToolCallbacks(List.of(planSubmitTool.planCallback()))
                 .withToolChoice(Map.of("type", "function",
                         "function", Map.of("name", PlanSubmitTool.TOOL_NAME)))
@@ -522,7 +525,7 @@ public class ReasoningEngine {
                     "\n【用户最新一句话】" + userMessage;
 
             DashScopeChatOptions options = DashScopeChatOptions.builder()
-                    .withModel("qwen-plus")
+                    .withModel("qwen3.8-max")
                     .withTemperature(0.0)
                     .build();
 
@@ -573,7 +576,7 @@ public class ReasoningEngine {
         }
 
         DashScopeChatOptions options = DashScopeChatOptions.builder()
-                .withModel("qwen-max")
+                .withModel("qwen3.8-max")
                 .withTemperature(0.7)
                 .build();
 
@@ -623,7 +626,7 @@ public class ReasoningEngine {
             }
 
             DashScopeChatOptions options = DashScopeChatOptions.builder()
-                    .withModel("qwen-max")
+                    .withModel("qwen3.8-max")
                     .withTemperature(0.3)
                     .build();
 

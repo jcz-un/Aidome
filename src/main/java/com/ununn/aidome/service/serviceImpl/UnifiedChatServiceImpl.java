@@ -422,7 +422,7 @@ public class UnifiedChatServiceImpl implements UnifiedChatService {
         var promptBuilder = chatClientWithMemory.prompt().user(context.getUserMessage());
 
         DashScopeChatOptions options = DashScopeChatOptions.builder()
-                .withModel("qwen-max")
+                .withModel("qwen3.8-max")
                 .withTemperature(0.7)
                 .build();
 
